@@ -1,0 +1,250 @@
+import time
+import random
+import datetime
+import os
+import sentry_sdk
+from sqlmodel import Session
+from ..models import Scan, Finding
+from ..core.config import Settings
+from typing import Optional, Dict, Any
+
+# optional imports for RQ/Redis — keep runtime-safe if packages aren't installed
+try:
+    from redis import Redis
+    from rq import Queue, Retry
+except Exception:  # pragma: no cover - optional in dev
+    Redis = None
+    Queue = None
+    Retry = None
+
+# prometheus metrics
+from prometheus_client import Counter, Histogram
+
+settings = Settings()
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+from ..core import db
+
+# metrics
+SCANS_ENQUEUED = Counter("scp_scans_enqueued_total", "Total scans enqueued")
+SCANS_STARTED = Counter("scp_scans_started_total", "Total scans started")
+SCANS_COMPLETED = Counter("scp_scans_completed_total", "Total scans completed")
+SCANS_FAILED = Counter("scp_scans_failed_total", "Total scans failed")
+SCAN_DURATION = Histogram("scp_scan_duration_seconds", "Scan run duration seconds")
+
+# simple in-memory index for quick read (scaffold only)
+_scan_index: Dict[str, Dict[str, Any]] = {}
+
+
+def enqueue_scan(scan_id, tenant_id: Optional[str] = None):
+    """Enqueue a scan job to Redis/RQ when available.
+    Falls back to synchronous execution when WORKER_SYNC=true or Redis isn't available (useful for local/dev/CI).
+    """
+    SCANS_ENQUEUED.inc()
+    worker_sync = os.getenv("WORKER_SYNC", "false").lower() in ("1", "true", "yes")
+    if worker_sync or Redis is None or Queue is None:
+        # synchronous fallback for dev and CI
+        return schedule_scan(scan_id, tenant_id=tenant_id)
+
+    try:
+        conn = Redis.from_url(REDIS_URL, decode_responses=True)
+        q = Queue(name="scans", connection=conn)
+        # enqueue the function by import path so worker can import it
+        retry_policy = Retry(max=3, interval=[10, 30, 60]) if Retry is not None else None
+        q.enqueue("app.services.scanner.schedule_scan", scan_id, tenant_id, retry=retry_policy, job_timeout=300)
+        # optimistic in-memory state
+        _scan_index[str(scan_id)] = {"status": "queued"}
+        return True
+    except Exception:
+        # if enqueue fails, run sync as a best-effort fallback
+        return schedule_scan(scan_id, tenant_id=tenant_id)
+
+
+def _record_failure(exc):
+    try:
+        sentry_sdk.capture_exception(exc)
+    except Exception:
+        pass
+
+
+@SCAN_DURATION.time()
+def schedule_scan(scan_id, tenant_id: Optional[str] = None):
+    """
+    Execute a scan job with real security scanners.
+    Clones repository, runs applicable scanners, aggregates findings.
+
+    Args:
+        scan_id: UUID of the scan
+        tenant_id: Optional tenant ID for billing
+    """
+    SCANS_STARTED.inc()
+    start_time = time.time()
+
+    from ..core import db
+    from .scanners import BanditScanner, PipAuditScanner, CheckovScanner, SemgrepScanner
+    from git import Repo
+    import tempfile
+    import shutil
+    from pathlib import Path
+
+    session = Session(db.engine)
+    scan = None
+    repo_dir = None
+
+    try:
+        # Fetch scan from database
+        scan = session.get(Scan, scan_id)
+        if not scan:
+            raise ValueError(f"Scan {scan_id} not found")
+
+        # Update status
+        scan.status = "running"
+        session.add(scan)
+        session.commit()
+        session.refresh(scan)
+
+        # Update in-memory cache
+        _scan_index[str(scan_id)] = {
+            "id": str(scan.id),
+            "repo_url": scan.repo_url,
+            "status": scan.status,
+            "created_at": scan.created_at.isoformat() if scan.created_at else None,
+        }
+
+        # Clone repository to temporary directory
+        repo_dir = tempfile.mkdtemp(prefix="scan_")
+        repo_path = Path(repo_dir)
+
+        try:
+            Repo.clone_from(scan.repo_url, repo_dir, depth=1)
+        except Exception as e:
+            raise Exception(f"Failed to clone repository: {e}")
+
+        # Initialize scanners
+        scanners = [
+            SemgrepScanner(),  # Multi-language scanner (runs first for broad coverage)
+            BanditScanner(),   # Python-specific
+            PipAuditScanner(), # Python dependencies
+            CheckovScanner()   # IaC
+        ]
+
+        # Run applicable scanners and collect findings
+        all_findings = []
+        for scanner in scanners:
+            try:
+                if scanner.is_applicable(repo_path):
+                    scanner_findings = scanner.scan(repo_path)
+                    all_findings.extend(scanner_findings)
+            except Exception as e:
+                # Log scanner failure but continue with other scanners
+                print(f"Scanner {scanner.get_name()} failed: {e}")
+                _record_failure(e)
+
+        # Store findings in database
+        for finding_result in all_findings:
+            finding = Finding(
+                scan_id=scan.id,
+                title=finding_result.title,
+                severity=finding_result.severity,
+                description=finding_result.description,
+                remediation=finding_result.remediation,
+                scanner_name=finding_result.scanner_name,
+                file_path=finding_result.file_path,
+                line_number=finding_result.line_number,
+                cve_id=finding_result.cve_id,
+                confidence=finding_result.confidence
+            )
+            session.add(finding)
+
+        # Calculate risk score based on findings
+        risk_score = _calculate_risk_score(all_findings)
+
+        # Mark scan as completed
+        scan.status = "completed"
+        scan.completed_at = datetime.datetime.utcnow()
+        scan.risk_score = risk_score
+        session.add(scan)
+        session.commit()
+        session.refresh(scan)
+
+        # Update cache
+        _scan_index[str(scan_id)] = {
+            "id": str(scan.id),
+            "repo_url": scan.repo_url,
+            "status": scan.status,
+            "created_at": scan.created_at.isoformat() if scan.created_at else None,
+            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
+            "risk_score": scan.risk_score,
+        }
+
+        SCANS_COMPLETED.inc()
+        duration = time.time() - start_time
+        SCAN_DURATION.observe(duration)
+
+        # Record billing
+        if tenant_id:
+            try:
+                from .billing import record_usage  # local import to avoid cycle in tests
+                record_usage(tenant_id=tenant_id, scans=1, billable_units=1)
+            except Exception as e:
+                _record_failure(e)
+
+    except Exception as exc:
+        SCANS_FAILED.inc()
+        if scan:
+            scan.status = "failed"
+            session.add(scan)
+            session.commit()
+            _scan_index[str(scan_id)] = {
+                "id": str(scan_id),
+                "status": "failed",
+            }
+        _record_failure(exc)
+        raise
+
+    finally:
+        session.close()
+        # Clean up cloned repository
+        if repo_dir and Path(repo_dir).exists():
+            try:
+                shutil.rmtree(repo_dir)
+            except Exception as e:
+                print(f"Failed to clean up repo directory: {e}")
+
+
+
+def _calculate_risk_score(findings: list) -> float:
+    """
+    Calculate risk score based on findings severity.
+    
+    Args:
+        findings: List of ScannerResult objects
+        
+    Returns:
+        Risk score from 0.0 to 10.0
+    """
+    if not findings:
+        return 0.0
+    
+    # Weight by severity
+    severity_weights = {
+        "HIGH": 10.0,
+        "MEDIUM": 5.0,
+        "LOW": 1.0
+    }
+    
+    total_score = 0.0
+    for finding in findings:
+        weight = severity_weights.get(finding.severity, 1.0)
+        total_score += weight
+    
+    # Normalize to 0-10 scale
+    # Cap at 10 findings of HIGH severity = 10.0 score
+    max_score = 100.0  # 10 HIGH findings
+    normalized_score = min(10.0, (total_score / max_score) * 10.0)
+    
+    return round(normalized_score, 2)
+
+
+
+def get_scan_result(scan_id) -> Optional[dict]:
+    return _scan_index.get(str(scan_id))

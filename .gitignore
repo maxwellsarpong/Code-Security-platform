@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+.devcontainer/
+*.py[cod]
+*.sqlite3
+*.db
+.env
+.DS_Store
+.vscode/
+.pytest_cache/
+.venv/
+coverage.xml
+reproduce_issue.py
+test_reproduce.db
+test_output.txt
+test_billing_debug.txt
+

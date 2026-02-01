@@ -1,0 +1,45 @@
+version: '3.8'
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=sqlite:////data/dev.db
+      - REDIS_URL=redis://redis:6379
+    volumes:
+      - ./src:/app/src:cached
+      - ./.data:/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+
+  worker:
+    build: .
+    command: rq worker scans -u redis://redis:6379
+    depends_on:
+      - redis
+      - api
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=sqlite:////data/dev.db
+      - WORKER_METRICS_PORT=9100
+      - SENTRY_DSN=
+    ports:
+      - "9100:9100"
+    volumes:
+      - ./src:/app/src:cached
+      - ./.data:/data
+
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: svc
+      POSTGRES_PASSWORD: svcpass
+      POSTGRES_DB: scp
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

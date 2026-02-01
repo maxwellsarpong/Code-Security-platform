@@ -1,0 +1,79 @@
+from fastapi import APIRouter, Depends, HTTPException, Header
+from sqlmodel import Session, select
+from sqlalchemy.orm import selectinload
+from typing import List, Optional
+from uuid import UUID
+from ..schemas import ScanCreate, ScanRead
+from ..models import Scan, Tenant, APIKey, Usage
+from ..core.db import get_session
+from ..services.scanner import enqueue_scan, get_scan_result
+from .deps import get_tenant_from_api_key
+import secrets
+
+router = APIRouter()
+
+
+@router.post("/tenants", status_code=201)
+def create_tenant(name: str, rate_limit_per_minute: int = 10, quota_per_month: int = 100, session: Session = Depends(get_session)):
+    tenant = Tenant(name=name, rate_limit_per_minute=rate_limit_per_minute, quota_per_month=quota_per_month)
+    session.add(tenant)
+    session.commit()
+    session.refresh(tenant)
+    # create an API key for convenience (scaffold — in prod hash/store securely)
+    raw = secrets.token_urlsafe(24)
+    apikey = APIKey(tenant_id=tenant.id, key=raw)
+    session.add(apikey)
+    session.commit()
+    return {"tenant_id": str(tenant.id), "api_key": raw}
+
+
+@router.get('/tenants/{tenant_id}/usage')
+def get_tenant_usage(tenant_id: UUID, session: Session = Depends(get_session)):
+    stmt = select(Usage).where(Usage.tenant_id == tenant_id)
+    rows = session.exec(stmt).all()
+    return rows
+
+
+@router.post("/scans", response_model=ScanRead, status_code=201)
+def create_scan(payload: ScanCreate, tenant = Depends(get_tenant_from_api_key), session: Session = Depends(get_session)):
+    scan = Scan.model_validate(payload.model_dump(mode='json'))
+    session.add(scan)
+    session.commit()
+    session.refresh(scan)
+
+    # Validate response model before enqueueing task to avoid DetachedInstanceError 
+    # if the worker runs synchronously and affects the session/object state.
+    response = ScanRead.model_validate(scan)
+
+    tenant_id = str(tenant.id) if tenant is not None else None
+    # enqueue scan (uses RQ when REDIS_URL is present; falls back to synchronous run for dev/test)
+    enqueue_scan(scan.id, tenant_id=tenant_id)
+
+    return response
+
+
+@router.get("/scans", response_model=List[ScanRead])
+def list_scans(session: Session = Depends(get_session)):
+    """Fetch a list of all scans."""
+    stmt = select(Scan).options(selectinload(Scan.findings)).order_by(Scan.created_at.desc())
+    scans = session.exec(stmt).all()
+    # Update status/risk scores from cache/in-memory results if needed
+    for scan in scans:
+        result = get_scan_result(scan.id)
+        if result:
+            scan.status = result.get("status", scan.status)
+            scan.risk_score = result.get("risk_score", scan.risk_score)
+    return scans
+
+
+@router.get("/scans/{scan_id}", response_model=ScanRead)
+def read_scan(scan_id: UUID, session: Session = Depends(get_session)):
+    stmt = select(Scan).where(Scan.id == scan_id).options(selectinload(Scan.findings))
+    scan = session.exec(stmt).first()
+    if not scan:
+        raise HTTPException(status_code=404, detail="scan not found")
+    result = get_scan_result(scan.id)
+    if result:
+        scan.status = result.get("status", scan.status)
+        scan.risk_score = result.get("risk_score", scan.risk_score)
+    return ScanRead.model_validate(scan)

@@ -41,6 +41,8 @@ The platform integrates four industry-standard security scanners:
 4. Risk score calculated based on severity (0-10 scale)
 5. Temporary files cleaned up
 
+<img src="Secure-Code-Platform.drawio.svg" alt="Architecture Diagram" width="800" />
+
 Quickstart (macOS):
 
 1) Create virtualenv and run locally

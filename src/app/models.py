@@ -11,6 +11,7 @@ class Scan(SQLModel, table=True):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None
     risk_score: Optional[float] = None
+    git_token: Optional[str] = None
 
     # Relationships
     findings: List["Finding"] = Relationship(back_populates="scan")

@@ -23,9 +23,8 @@ class BanditScanner(BaseScanner):
         Returns:
             True if Python files are found
         """
-        # Check for .py files
-        py_files = list(repo_path.rglob("*.py"))
-        return len(py_files) > 0
+        # Check for any .py files efficiently
+        return next(repo_path.rglob("*.py"), None) is not None
     
     def scan(self, repo_path: Path) -> List[ScannerResult]:
         """
@@ -63,6 +62,8 @@ class BanditScanner(BaseScanner):
             # Parse JSON output
             if result.stdout:
                 data = json.loads(result.stdout)
+                found_count = len(data.get("results", []))
+                print(f"Bandit found {found_count} issues.")
                 
                 # Process each finding
                 for issue in data.get("results", []):

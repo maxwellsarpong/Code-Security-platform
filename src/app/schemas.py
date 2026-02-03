@@ -6,6 +6,7 @@ from datetime import datetime
 
 class ScanCreate(BaseModel):
     repo_url: HttpUrl
+    git_token: Optional[str] = None
 
 
 class FindingRead(BaseModel):

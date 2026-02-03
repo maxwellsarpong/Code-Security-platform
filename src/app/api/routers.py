@@ -57,12 +57,6 @@ def list_scans(session: Session = Depends(get_session)):
     """Fetch a list of all scans."""
     stmt = select(Scan).options(selectinload(Scan.findings)).order_by(Scan.created_at.desc())
     scans = session.exec(stmt).all()
-    # Update status/risk scores from cache/in-memory results if needed
-    for scan in scans:
-        result = get_scan_result(scan.id)
-        if result:
-            scan.status = result.get("status", scan.status)
-            scan.risk_score = result.get("risk_score", scan.risk_score)
     return scans
 
 
@@ -72,8 +66,4 @@ def read_scan(scan_id: UUID, session: Session = Depends(get_session)):
     scan = session.exec(stmt).first()
     if not scan:
         raise HTTPException(status_code=404, detail="scan not found")
-    result = get_scan_result(scan.id)
-    if result:
-        scan.status = result.get("status", scan.status)
-        scan.risk_score = result.get("risk_score", scan.risk_score)
     return ScanRead.model_validate(scan)

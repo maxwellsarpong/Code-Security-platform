@@ -1,9 +1,11 @@
 FROM python:3.11-slim
 WORKDIR /app
 
-# Install system dependencies (build tools + git for repository cloning)
+# Install system dependencies (build tools + git + curl for scanners)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc build-essential git \
+    && apt-get install -y --no-install-recommends gcc build-essential git curl \
+    && curl -L https://github.com/google/osv-scanner/releases/download/v1.9.1/osv-scanner_linux_arm64 -o /usr/local/bin/osv-scanner \
+    && chmod +x /usr/local/bin/osv-scanner \
     && rm -rf /var/lib/apt/lists/*
 
 # Explicitly set git path for GitPython

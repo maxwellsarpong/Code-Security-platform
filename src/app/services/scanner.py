@@ -3,6 +3,9 @@ import random
 import datetime
 import os
 import sentry_sdk
+import shutil
+from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlmodel import Session
 from ..models import Scan, Finding
 from ..core.config import Settings
@@ -51,8 +54,6 @@ def enqueue_scan(scan_id, tenant_id: Optional[str] = None):
         # enqueue the function by import path so worker can import it
         retry_policy = Retry(max=3, interval=[10, 30, 60]) if Retry is not None else None
         q.enqueue("app.services.scanner.schedule_scan", scan_id, tenant_id, retry=retry_policy, job_timeout=300)
-        # optimistic in-memory state
-        _scan_index[str(scan_id)] = {"status": "queued"}
         return True
     except Exception:
         # if enqueue fails, run sync as a best-effort fallback
@@ -80,7 +81,7 @@ def schedule_scan(scan_id, tenant_id: Optional[str] = None):
     start_time = time.time()
 
     from ..core import db
-    from .scanners import BanditScanner, PipAuditScanner, CheckovScanner, SemgrepScanner
+    from .scanners import BanditScanner, PipAuditScanner, CheckovScanner, SemgrepScanner, OSVScanner
     from git import Repo
     import tempfile
     import shutil
@@ -102,44 +103,62 @@ def schedule_scan(scan_id, tenant_id: Optional[str] = None):
         session.commit()
         session.refresh(scan)
 
-        # Update in-memory cache
-        _scan_index[str(scan_id)] = {
-            "id": str(scan.id),
-            "repo_url": scan.repo_url,
-            "status": scan.status,
-            "created_at": scan.created_at.isoformat() if scan.created_at else None,
-        }
-
         # Clone repository to temporary directory
         repo_dir = tempfile.mkdtemp(prefix="scan_")
         repo_path = Path(repo_dir)
 
+        clone_url = scan.repo_url
+        if scan.git_token:
+            # Reconstruct URL with token: https://<token>@github.com/user/repo.git
+            from urllib.parse import urlparse, urlunparse
+            parsed = urlparse(scan.repo_url)
+            clone_url = urlunparse(parsed._replace(netloc=f"{scan.git_token}@{parsed.netloc}"))
+
         try:
-            Repo.clone_from(scan.repo_url, repo_dir, depth=1)
+            print(f"Cloning repository: {scan.repo_url}") # Log without token
+            Repo.clone_from(clone_url, repo_dir, depth=1)
         except Exception as e:
-            raise Exception(f"Failed to clone repository: {e}")
+            # Redact token from error message if possible
+            error_msg = str(e)
+            if scan.git_token:
+                error_msg = error_msg.replace(scan.git_token, "********")
+            raise Exception(f"Failed to clone repository: {error_msg}")
 
         # Initialize scanners
         scanners = [
             SemgrepScanner(),  # Multi-language scanner (runs first for broad coverage)
             BanditScanner(),   # Python-specific
             PipAuditScanner(), # Python dependencies
-            CheckovScanner()   # IaC
+            CheckovScanner(),  # IaC
+            OSVScanner()       # Multi-lang dependencies (JS, Go, Rust, etc.)
         ]
 
-        # Run applicable scanners and collect findings
+        # Run applicable scanners in parallel and collect findings
         all_findings = []
-        for scanner in scanners:
-            try:
-                if scanner.is_applicable(repo_path):
-                    scanner_findings = scanner.scan(repo_path)
-                    all_findings.extend(scanner_findings)
-            except Exception as e:
-                # Log scanner failure but continue with other scanners
-                print(f"Scanner {scanner.get_name()} failed: {e}")
-                _record_failure(e)
+        
+        def run_scanner(scanner_instance, path):
+            if scanner_instance.is_applicable(path):
+                print(f"Starting scanner: {scanner_instance.get_name()}")
+                return scanner_instance.scan(path)
+            return []
+
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            future_to_scanner = {
+                executor.submit(run_scanner, s, repo_path): s 
+                for s in scanners
+            }
+            
+            for future in as_completed(future_to_scanner):
+                scanner = future_to_scanner[future]
+                try:
+                    findings = future.result()
+                    all_findings.extend(findings)
+                except Exception as e:
+                    print(f"Scanner {scanner.get_name()} failed: {e}")
+                    _record_failure(e)
 
         # Store findings in database
+        print(f"Found {len(all_findings)} issues. Saving to database...")
         for finding_result in all_findings:
             finding = Finding(
                 scan_id=scan.id,
@@ -163,18 +182,10 @@ def schedule_scan(scan_id, tenant_id: Optional[str] = None):
         scan.completed_at = datetime.datetime.utcnow()
         scan.risk_score = risk_score
         session.add(scan)
+        session.flush()
         session.commit()
-        session.refresh(scan)
 
-        # Update cache
-        _scan_index[str(scan_id)] = {
-            "id": str(scan.id),
-            "repo_url": scan.repo_url,
-            "status": scan.status,
-            "created_at": scan.created_at.isoformat() if scan.created_at else None,
-            "completed_at": scan.completed_at.isoformat() if scan.completed_at else None,
-            "risk_score": scan.risk_score,
-        }
+        print(f"Scan {scan_id} completed successfully with risk score {risk_score}. Done.")
 
         SCANS_COMPLETED.inc()
         duration = time.time() - start_time
@@ -194,10 +205,6 @@ def schedule_scan(scan_id, tenant_id: Optional[str] = None):
             scan.status = "failed"
             session.add(scan)
             session.commit()
-            _scan_index[str(scan_id)] = {
-                "id": str(scan_id),
-                "status": "failed",
-            }
         _record_failure(exc)
         raise
 
@@ -247,4 +254,5 @@ def _calculate_risk_score(findings: list) -> float:
 
 
 def get_scan_result(scan_id) -> Optional[dict]:
-    return _scan_index.get(str(scan_id))
+    # Cache removed in favor of DB truth
+    return None

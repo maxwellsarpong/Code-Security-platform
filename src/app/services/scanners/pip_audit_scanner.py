@@ -77,6 +77,8 @@ class PipAuditScanner(BaseScanner):
             # Parse JSON output
             if result.stdout:
                 data = json.loads(result.stdout)
+                found_count = sum(len(d.get("vulns", [])) for d in data.get("dependencies", []))
+                print(f"pip-audit found {found_count} vulnerabilities.")
                 
                 # Process each vulnerability
                 for vuln in data.get("dependencies", []):

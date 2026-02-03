@@ -33,7 +33,7 @@ class CheckovScanner(BaseScanner):
         ]
         
         for pattern in iac_patterns:
-            if list(repo_path.rglob(pattern)):
+            if next(repo_path.rglob(pattern), None):
                 return True
         
         return False
@@ -74,6 +74,9 @@ class CheckovScanner(BaseScanner):
             # Parse JSON output
             if result.stdout:
                 data = json.loads(result.stdout)
+                # checkov can return a list or a single object depending on version/args
+                checks = data.get("results", {}).get("failed_checks", []) if isinstance(data, dict) else []
+                print(f"Checkov found {len(checks)} issues.")
                 
                 # Checkov returns results per framework
                 for check_type in data.get("results", {}).get("failed_checks", []):

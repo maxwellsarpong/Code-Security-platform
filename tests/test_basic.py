@@ -3,11 +3,21 @@ from unittest.mock import patch
 from datetime import datetime
 
 
-def test_health(client):
+@patch("redis.Redis.from_url")
+@patch("app.main.Session")
+def test_health(mock_session_class, mock_redis_from_url, client):
+    """Test health endpoint returns 200 when dependencies are mocked as healthy."""
+    # Mock Redis success
+    mock_redis = mock_redis_from_url.return_value
+    mock_redis.ping.return_value = True
+    
+    # Mock DB success
+    mock_session = mock_session_class.return_value.__enter__.return_value
+    
     response = client.get("/health")
     assert response.status_code == 200
     data = response.json()
-    assert data["status"] == "ok"  # API returns "ok", not "healthy"
+    assert data["status"] == "ok"
 
 
 

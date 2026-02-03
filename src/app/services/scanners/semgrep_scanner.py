@@ -45,16 +45,13 @@ class SemgrepScanner(BaseScanner):
         Returns:
             True if any supported language files found
         """
-        # Check for any supported file extensions
+        # Check for any supported file extensions efficiently
         for extensions in self.SUPPORTED_LANGUAGES.values():
             for ext in extensions:
-                if ext.startswith("."):
-                    if list(repo_path.rglob(f"*{ext}")):
-                        return True
-                else:
-                    # Handle special cases like Dockerfile
-                    if list(repo_path.rglob(ext)):
-                        return True
+                pattern = f"*{ext}" if ext.startswith(".") else ext
+                # next() on rglob is much faster than list() because it short-circuits
+                if next(repo_path.rglob(pattern), None):
+                    return True
         
         return False
     
@@ -81,6 +78,12 @@ class SemgrepScanner(BaseScanner):
                 "--config", "auto",  # Use Semgrep Registry rules
                 "--json",  # JSON output
                 "--quiet",  # Suppress progress
+                "--exclude", "node_modules",
+                "--exclude", "vendor",
+                "--exclude", "tests",
+                "--exclude", "test",
+                "--exclude", "*.test.js",
+                "--exclude", "*.spec.js",
                 str(repo_path)
             ]
             
@@ -95,6 +98,8 @@ class SemgrepScanner(BaseScanner):
             # Parse JSON output
             if result.stdout:
                 data = json.loads(result.stdout)
+                found_count = len(data.get("results", []))
+                print(f"Semgrep found {found_count} issues.")
                 
                 # Process each finding
                 for finding in data.get("results", []):

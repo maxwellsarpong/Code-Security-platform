@@ -21,6 +21,8 @@ class FindingRead(BaseModel):
     line_number: Optional[int] = None
     cve_id: Optional[str] = None
     confidence: Optional[str] = None
+    is_fixed: bool = False
+    pr_url: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -35,3 +37,15 @@ class ScanRead(BaseModel):
     findings: Optional[List[FindingRead]] = []
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class ResolutionRequest(BaseModel):
+    github_token: Optional[str] = None
+
+
+class ResolutionResponse(BaseModel):
+    status: str
+    pr_url: Optional[str] = None
+    finding_id: UUID
+    message: str
+

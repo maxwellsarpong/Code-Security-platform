@@ -108,11 +108,28 @@ def schedule_scan(scan_id, tenant_id: Optional[str] = None):
         repo_path = Path(repo_dir)
 
         clone_url = scan.repo_url
-        if scan.git_token:
+        token = scan.git_token
+        
+        # If no token in DB, check settings based on platform
+        if not token:
+            platform = "github"
+            if "gitlab.com" in scan.repo_url.lower():
+                platform = "gitlab"
+            elif "bitbucket.org" in scan.repo_url.lower():
+                platform = "bitbucket"
+            
+            if platform == "github":
+                token = settings.github_token
+            elif platform == "gitlab":
+                token = settings.gitlab_token
+            elif platform == "bitbucket":
+                token = settings.bitbucket_token
+
+        if token:
             # Reconstruct URL with token: https://<token>@github.com/user/repo.git
             from urllib.parse import urlparse, urlunparse
             parsed = urlparse(scan.repo_url)
-            clone_url = urlunparse(parsed._replace(netloc=f"{scan.git_token}@{parsed.netloc}"))
+            clone_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
 
         try:
             print(f"Cloning repository: {scan.repo_url}") # Log without token

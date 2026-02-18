@@ -60,7 +60,9 @@ class CheckovScanner(BaseScanner):
                 "-d", str(repo_path),  # Directory to scan
                 "-o", "json",  # JSON output
                 "--quiet",  # Suppress progress
-                "--compact"  # Compact output
+                "--compact",  # Compact output
+                "--skip-path", "env",
+                "--skip-path", ".env"
             ]
             
             # Checkov exits with code 1 if issues found

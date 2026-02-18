@@ -73,6 +73,10 @@ class OSVScanner(BaseScanner):
                 if file_path.startswith(str(repo_path)):
                     file_path = file_path[len(str(repo_path)) + 1:]
                 
+                # Exclude findings from env and .env directories
+                if "env/" in file_path or ".env/" in file_path or file_path.startswith("env/") or file_path.startswith(".env/"):
+                    continue
+                
                 for pkg_info in res.get("packages", []):
                     package = pkg_info.get("package", {})
                     pkg_name = package.get("name", "unknown")

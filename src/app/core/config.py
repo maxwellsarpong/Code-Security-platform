@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from typing import Optional
 
 
 import os
@@ -13,6 +14,21 @@ class Settings(BaseSettings):
     scanner_temp_dir: str = "/tmp/scans"
     enabled_scanners: str = "bandit,checkov,pip-audit"  # Comma-separated list
 
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+    # Resolution configuration
+    github_token: Optional[str] = None
+    gitlab_token: Optional[str] = None
+    bitbucket_token: Optional[str] = None
+
+    model_config = {
+        "env_file": ".env",
+        "env_file_encoding": "utf-8",
+        "extra": "ignore"
+    }
+
+# Initialize and debug
+settings = Settings()
+print(f"!!! CONFIG DEBUG !!! Project: {settings.project_name}")
+if settings.github_token or settings.gitlab_token or settings.bitbucket_token:
+    print(".....token present.....")
+else:
+    print(".....token not present.....")

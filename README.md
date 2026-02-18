@@ -70,6 +70,10 @@ API (examples)
 - Get scan: GET /api/v1/scans/{scan_id}
   - Returns scan status, risk score, and findings
   - Findings include: title, severity, description, remediation, file path, line number, CVE ID
+- Resolve finding: POST /api/v1/findings/{finding_id}/resolve
+  - Tries to fix the finding by creating a PR
+  - Returns PR URL if successful
+
 
 Running the worker (queue mode)
 

@@ -149,9 +149,12 @@ class PipAuditScanner(BaseScanner):
         ]
         
         for dep_file in dependency_files:
-            file_path = repo_path / dep_file
-            if file_path.exists():
-                return file_path
+            # Efficiently search for dependency files but avoid env/.env
+            # We use rglob but filter out matches in excluded directories
+            for found_path in repo_path.rglob(dep_file):
+                path_str = str(found_path.relative_to(repo_path))
+                if not any(excluded in path_str for excluded in ["env/", ".env/", "venv/"]):
+                    return found_path
         
         return None
     

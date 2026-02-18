@@ -30,6 +30,8 @@ class Finding(SQLModel, table=True):
     line_number: Optional[int] = None
     cve_id: Optional[str] = None
     confidence: Optional[str] = None
+    is_fixed: bool = Field(default=False)
+    pr_url: Optional[str] = None
 
     # Relationships
     scan: Optional[Scan] = Relationship(back_populates="findings")

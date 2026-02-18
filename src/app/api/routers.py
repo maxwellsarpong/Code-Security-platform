@@ -3,10 +3,11 @@ from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from uuid import UUID
-from ..schemas import ScanCreate, ScanRead
-from ..models import Scan, Tenant, APIKey, Usage
+from ..schemas import ScanCreate, ScanRead, ResolutionRequest, ResolutionResponse, FindingRead
+from ..models import Scan, Tenant, APIKey, Usage, Finding
 from ..core.db import get_session
 from ..services.scanner import enqueue_scan, get_scan_result
+from ..services.resolution import ResolutionService
 from .deps import get_tenant_from_api_key
 import secrets
 
@@ -67,3 +68,33 @@ def read_scan(scan_id: UUID, session: Session = Depends(get_session)):
     if not scan:
         raise HTTPException(status_code=404, detail="scan not found")
     return ScanRead.model_validate(scan)
+
+
+@router.post("/findings/{finding_id}/resolve", response_model=ResolutionResponse)
+def resolve_finding(
+    finding_id: UUID, 
+    payload: Optional[ResolutionRequest] = None,
+    session: Session = Depends(get_session),
+    tenant = Depends(get_tenant_from_api_key)
+):
+    """
+    Resolve a specific finding using AI and create a pull request.
+    """
+    github_token = payload.github_token if payload else None
+    service = ResolutionService(session)
+    response = service.resolve_finding(finding_id, github_token=github_token)
+    
+    if response.status == "failed":
+        if "not found" in response.message:
+            raise HTTPException(status_code=404, detail=response.message)
+        raise HTTPException(status_code=500, detail=response.message)
+    
+    return response
+
+
+@router.get("/findings/fixed", response_model=List[FindingRead])
+def list_fixed_findings(session: Session = Depends(get_session)):
+    """Fetch all vulnerabilities that have been successfully resolved with a PR."""
+    stmt = select(Finding).where(Finding.is_fixed == True)
+    findings = session.exec(stmt).all()
+    return findings

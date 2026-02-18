@@ -48,6 +48,7 @@ class BanditScanner(BaseScanner):
                 "-r",  # Recursive
                 str(repo_path),
                 "-f", "json",  # JSON format
+                "-x", "env,.env", # Exclude virtual environments
                 "--quiet"  # Suppress progress
             ]
             

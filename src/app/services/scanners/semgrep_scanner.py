@@ -84,6 +84,8 @@ class SemgrepScanner(BaseScanner):
                 "--exclude", "test",
                 "--exclude", "*.test.js",
                 "--exclude", "*.spec.js",
+                "--exclude", "env",
+                "--exclude", ".env",
                 str(repo_path)
             ]
             

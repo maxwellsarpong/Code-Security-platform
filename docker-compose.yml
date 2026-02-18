@@ -10,6 +10,7 @@ services:
     volumes:
       - ./src:/app/src:cached
       - ./.data:/data
+    env_file: .env
 
   redis:
     image: redis:7-alpine
@@ -17,7 +18,7 @@ services:
 
   worker:
     build: .
-    command: rq worker scans -u redis://redis:6379
+    command: rq worker scans resolutions -u redis://redis:6379
     depends_on:
       - redis
       - api
@@ -31,6 +32,7 @@ services:
     volumes:
       - ./src:/app/src:cached
       - ./.data:/data
+    env_file: .env
 
   db:
     image: postgres:15

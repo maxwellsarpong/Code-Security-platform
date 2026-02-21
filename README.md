@@ -61,21 +61,94 @@ docker compose up --build
 # API -> http://localhost:8000
 ```
 
-API (examples)
+### Authentication & Multi-tenancy
 
-- Health: GET /health
-- Start scan: POST /api/v1/scans  -> body: { "repo_url": "https://github.com/owner/repo" }
-  - Clones repository and runs Semgrep (multi-language), Bandit, Checkov, and pip-audit scanners
-  - Returns scan ID for polling
-- Get scan: GET /api/v1/scans/{scan_id}
-  - Returns scan status, risk score, and findings
-  - Findings include: title, severity, description, remediation, file path, line number, CVE ID
-- Resolve finding: POST /api/v1/findings/{finding_id}/resolve
-  - Tries to fix the finding by creating a PR
-  - Returns PR URL if successful
+The platform supports multi-tenancy via **JWT Authentication** (for users) and **API Keys** (for automated services).
 
+#### 1. Register & Login (JWT)
 
-Running the worker (queue mode)
+First, register a new user. This will automatically create a new tenant for you.
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/register \
+     -H "Content-Type: application/json" \
+     -d '{
+       "email": "user@example.com",
+       "password": "yourpassword",
+       "tenant_name": "Acme Corp"
+     }'
+```
+
+Then, login to receive your access token (JSON supported):
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{
+       "email": "user@example.com",
+       "password": "yourpassword"
+     }'
+```
+
+Response: `{ "access_token": "...", "token_type": "bearer" }`
+
+Use the `access_token` in the `Authorization: Bearer <token>` header for subsequent requests.
+
+#### 2. API Key Authentication (Fallback)
+
+For automated services, use `/token` with form-data (standard OAuth2) or an API key:
+
+```bash
+# OAuth2 Token endpoint (form-data)
+curl -X POST http://localhost:8000/api/v1/auth/token \
+     -d "username=user@example.com&password=yourpassword"
+```
+
+Use the `api_key` in the `x-api-key: <api_key>` header.
+
+---
+
+### API Reference
+
+#### Authentication
+- `POST /api/v1/auth/register`: Register user & tenant.
+- `POST /api/v1/auth/login`: Login to get JWT (JSON).
+- `POST /api/v1/auth/token`: OAuth2 legacy login (Form-data).
+
+#### Scans
+- `POST /api/v1/scans`: Start a new security scan.
+  ```bash
+  curl -X POST http://localhost:8000/api/v1/scans \
+       -H "Authorization: Bearer <JWT_TOKEN>" \
+       -H "Content-Type: application/json" \
+       -d '{ "repo_url": "https://github.com/owner/repo" }'
+  ```
+- `GET /api/v1/scans`: List all scans for the tenant.
+- `GET /api/v1/scans/{scan_id}`: Get details of a specific scan.
+
+#### Findings & Resolution
+- `GET /api/v1/findings/fixed`: List all successfully resolved vulnerabilities.
+- `POST /api/v1/findings/{target_id}/resolve`: Resolve vulnerabilities. Accepts either a **Finding ID** (to fix one) or a **Scan ID** (to fix all in that scan).
+  ```bash
+  curl -X POST http://localhost:8000/api/v1/findings/<ID>/resolve \
+       -H "Authorization: Bearer <JWT_TOKEN>" \
+       -H "Content-Type: application/json" \
+       -d '{ "github_token": "your_personal_access_token_if_not_in_settings" }'
+  ```
+
+#### Tenants & Usage
+- `GET /api/v1/tenants`: List all tenants in the system.
+- `POST /api/v1/tenants`: Create a tenant and API key (Scaffold).
+- `GET /api/v1/tenants/{tenant_id}/usage`: Retrieve usage stats for a tenant.
+- `POST /api/v1/tenants/subscription/renew`: Manually renew the monthly quota subscription for the current tenant.
+  ```bash
+  curl -X POST http://localhost:8000/api/v1/tenants/subscription/renew?amount=100.0 \
+       -H "x-api-key: <YOUR_API_KEY>"
+  ```
+
+---
+
+## Running the worker (queue mode)
 
 - Local (dev):
 ```bash
@@ -93,7 +166,7 @@ docker compose up --build
 # worker logs are visible in the `worker` service
 ```
 
-Observability (Prometheus + Sentry) 📈
+## Observability (Prometheus + Sentry) 📈
 
 - API metrics: `GET /metrics` (Prometheus format)
 - Worker metrics: exposed on `9100` by default when running the worker
@@ -106,24 +179,6 @@ SENTRY_DSN="" docker compose up --build
 # scrape metrics from http://localhost:8000/metrics and http://localhost:9100/
 ```
 
-Tenants, API keys, quotas & billing (scaffold) 💳
-
-- Create a tenant + API key (scaffold):
-
-  ```
-  POST /api/v1/tenants?name=acme&rate_limit_per_minute=10&quota_per_month=100
-  ```
-
-  Response: `{ "tenant_id": "...", "api_key": "..." }`
-
-- Use the API key: include header `x-api-key: <api_key>` on requests. The server enforces per-tenant rate limits and monthly quotas.
-
-- Billing & metering: each completed scan records a `Usage` row and a `BillingEvent`. Retrieve per-tenant usage with:
-
-  ```
-  GET /api/v1/tenants/{tenant_id}/usage
-  ```
-
-CI / running without Redis
+## CI / running without Redis
 
 - The scaffold supports a synchronous fallback for local dev and CI. Set `WORKER_SYNC=true` to run scan jobs synchronously (the default in tests/CI).

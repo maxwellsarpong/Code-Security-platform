@@ -19,7 +19,7 @@ def test_metrics_endpoint_available(client):
 
 
 @patch("app.services.scanner.schedule_scan")
-def test_scan_increments_metrics(mock_schedule_scan, client):
+def test_scan_increments_metrics(mock_schedule_scan, auth_client):
     """Test that creating a scan increments Prometheus metrics."""
     # Mock the schedule_scan function to avoid actual repo cloning
     def mock_scan_execution(scan_id, tenant_id=None):
@@ -37,6 +37,7 @@ def test_scan_increments_metrics(mock_schedule_scan, client):
                 # Add a mock finding
                 finding = Finding(
                     scan_id=scan.id,
+                    tenant_id=scan.tenant_id,
                     title="Mock Security Issue",
                     severity="LOW",
                     description="This is a mock finding for testing",
@@ -55,7 +56,7 @@ def test_scan_increments_metrics(mock_schedule_scan, client):
     before_completed = SCANS_COMPLETED._value._value
     
     # Create a scan
-    response = client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo"})
+    response = auth_client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo"})
     assert response.status_code == 201
     scan_id = response.json()["id"]
 
@@ -63,6 +64,6 @@ def test_scan_increments_metrics(mock_schedule_scan, client):
     assert mock_schedule_scan.called
     
     # Verify scan completed
-    scan_response = client.get(f"/api/v1/scans/{scan_id}")
+    scan_response = auth_client.get(f"/api/v1/scans/{scan_id}")
     assert scan_response.status_code == 200
     assert scan_response.json()["status"] == "completed"

@@ -22,6 +22,7 @@ def test_billing_recorded_after_scan(mock_schedule_scan, client):
                 # Add a mock finding
                 finding = Finding(
                     scan_id=scan.id,
+                    tenant_id=scan.tenant_id,
                     title="Mock Security Issue",
                     severity="HIGH",
                     description="This is a mock finding for testing",
@@ -41,7 +42,7 @@ def test_billing_recorded_after_scan(mock_schedule_scan, client):
     api_key = body["api_key"]
     tenant_id = body["tenant_id"]
     headers = {"x-api-key": api_key}
-
+\
     # Create a scan with tenant API key
     response = client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo"}, headers=headers)
     assert response.status_code == 201
@@ -51,6 +52,6 @@ def test_billing_recorded_after_scan(mock_schedule_scan, client):
     assert mock_schedule_scan.called
     
     # Verify scan was created in database
-    scan_response = client.get(f"/api/v1/scans/{scan_id}")
+    scan_response = client.get(f"/api/v1/scans/{scan_id}", headers=headers)
     assert scan_response.status_code == 200
     assert scan_response.json()["status"] == "completed"

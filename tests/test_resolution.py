@@ -14,13 +14,15 @@ def test_resolve_finding_endpoint(client, session):
     headers = {"x-api-key": api_key}
 
     # Setup: Create a scan and a finding
-    scan = Scan(repo_url="https://github.com/test/repo", status="completed")
+    tenant_id = data["tenant_id"]
+    scan = Scan(tenant_id=tenant_id, repo_url="https://github.com/test/repo", status="completed")
     session.add(scan)
     session.commit()
     session.refresh(scan)
 
     finding = Finding(
         scan_id=scan.id,
+        tenant_id=tenant_id,
         title="Test Vulnerability",
         severity="HIGH",
         description="Test Description",
@@ -73,12 +75,19 @@ def test_resolution_service_logic(session):
     from app.services.resolution import ResolutionService
     
     # Setup
-    scan = Scan(repo_url="https://github.com/test/repo", status="completed")
+    # Create a dummy tenant for context
+    tenant = Tenant(name="Logic Test Tenant")
+    session.add(tenant)
+    session.commit()
+    session.refresh(tenant)
+    
+    scan = Scan(tenant_id=tenant.id, repo_url="https://github.com/test/repo", status="completed")
     session.add(scan)
     session.commit()
     
     finding = Finding(
         scan_id=scan.id,
+        tenant_id=tenant.id,
         title="Test Vulnerability",
         severity="HIGH",
         description="Test Description",
@@ -116,20 +125,28 @@ def test_resolution_service_logic(session):
 
 def test_resolution_service_gitlab(session):
     from app.services.resolution import ResolutionService
-    scan = Scan(repo_url="https://gitlab.com/test/group/project", status="completed")
+    # Setup
+    tenant = Tenant(name="GitLab Test")
+    session.add(tenant)
+    session.commit()
+    session.refresh(tenant)
+    
+    scan = Scan(tenant_id=tenant.id, repo_url="https://gitlab.com/test/group/project", status="completed")
     session.add(scan)
     session.commit()
-    finding = Finding(scan_id=scan.id, title="Test", severity="HIGH", description="Desc", file_path="main.py")
+    finding = Finding(scan_id=scan.id, tenant_id=tenant.id, title="Test", severity="HIGH", description="Desc", file_path="main.py")
     session.add(finding)
     session.commit()
 
-    service = ResolutionService(session)
     with patch("app.services.resolution.Repo.clone_from") as mock_clone, \
          patch("app.services.resolution.ResolutionService._generate_fix") as mock_fix, \
          patch("app.services.resolution.requests.post") as mock_post, \
          patch("app.services.resolution.Path.exists") as mock_exists, \
+         patch("app.services.resolution.SlackService") as mock_slack, \
+         patch("app.services.resolution.JiraService") as mock_jira, \
          patch("app.services.resolution.open", create=True) as mock_open:
         
+        service = ResolutionService(session)
         mock_clone.return_value = MagicMock()
         mock_fix.return_value = "fixed"
         mock_exists.return_value = True
@@ -148,20 +165,28 @@ def test_resolution_service_gitlab(session):
 
 def test_resolution_service_bitbucket(session):
     from app.services.resolution import ResolutionService
-    scan = Scan(repo_url="https://bitbucket.org/workspace/repo", status="completed")
+    # Setup
+    tenant = Tenant(name="Bitbucket Test")
+    session.add(tenant)
+    session.commit()
+    session.refresh(tenant)
+    
+    scan = Scan(tenant_id=tenant.id, repo_url="https://bitbucket.org/workspace/repo", status="completed")
     session.add(scan)
     session.commit()
-    finding = Finding(scan_id=scan.id, title="Test", severity="HIGH", description="Desc", file_path="main.py")
+    finding = Finding(scan_id=scan.id, tenant_id=tenant.id, title="Test", severity="HIGH", description="Desc", file_path="main.py")
     session.add(finding)
     session.commit()
 
-    service = ResolutionService(session)
     with patch("app.services.resolution.Repo.clone_from") as mock_clone, \
          patch("app.services.resolution.ResolutionService._generate_fix") as mock_fix, \
          patch("app.services.resolution.requests.post") as mock_post, \
          patch("app.services.resolution.Path.exists") as mock_exists, \
+         patch("app.services.resolution.SlackService") as mock_slack, \
+         patch("app.services.resolution.JiraService") as mock_jira, \
          patch("app.services.resolution.open", create=True) as mock_open:
         
+        service = ResolutionService(session)
         mock_clone.return_value = MagicMock()
         mock_fix.return_value = "fixed"
         mock_exists.return_value = True
@@ -197,12 +222,18 @@ def test_bundled_resolution_scan(session):
     from app.services.resolution import ResolutionService
     service = ResolutionService(session)
     
-    scan = Scan(id=uuid4(), repo_url="https://github.com/test/repo", status="completed")
+    # Setup
+    tenant = Tenant(name="Bundled Test")
+    session.add(tenant)
+    session.commit()
+    session.refresh(tenant)
+    
+    scan = Scan(id=uuid4(), tenant_id=tenant.id, repo_url="https://github.com/test/repo", status="completed")
     session.add(scan)
     session.commit()
     
-    f1 = Finding(scan_id=scan.id, title="Vuln 1", file_path="f1.py", description="D1", severity="HIGH")
-    f2 = Finding(scan_id=scan.id, title="Vuln 2", file_path="f2.py", description="D2", severity="LOW")
+    f1 = Finding(scan_id=scan.id, tenant_id=tenant.id, title="Vuln 1", file_path="f1.py", description="D1", severity="HIGH")
+    f2 = Finding(scan_id=scan.id, tenant_id=tenant.id, title="Vuln 2", file_path="f2.py", description="D2", severity="LOW")
     session.add(f1)
     session.add(f2)
     session.commit()

@@ -43,3 +43,22 @@ def client_fixture(session: Session):
     yield client
     app.dependency_overrides.clear()
 
+
+@pytest.fixture(name="auth_client")
+def auth_client_fixture(client: TestClient):
+    """Provides a client with a default tenant's API key in headers."""
+    response = client.post("/api/v1/tenants?name=DefaultTestTenant")
+    data = response.json()
+    api_key = data["api_key"]
+    client.headers.update({"x-api-key": api_key})
+    return client
+
+
+@pytest.fixture(name="default_tenant_id")
+def default_tenant_id_fixture(client: TestClient):
+    """Provides the UUID of the default test tenant."""
+    response = client.post("/api/v1/tenants?name=TenantIDFixture")
+    data = response.json()
+    from uuid import UUID
+    return UUID(data["tenant_id"])
+

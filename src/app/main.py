@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Depends, Response
+from fastapi.middleware.cors import CORSMiddleware
 import os
 from .api.routers import router
 from .core.config import Settings
@@ -18,6 +19,16 @@ if SENTRY_DSN:
     sentry_sdk.init(dsn=SENTRY_DSN, traces_sample_rate=0.1)
 
 app = FastAPI(title="security-compliance-platform - scanner API")
+
+# Configure CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allows all methods (GET, POST, OPTIONS, etc.)
+    allow_headers=["*"],  # Allows all headers
+)
+
 app.include_router(router, prefix="/api/v1")
 
 

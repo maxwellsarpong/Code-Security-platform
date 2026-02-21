@@ -11,10 +11,12 @@ from git import Repo
 from sqlmodel import Session, select
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from ..models import Scan, Finding
+from ..models import Scan, Finding, Tenant
 from ..core.config import Settings
 from ..schemas import ResolutionResponse
 from ..core import db
+from .slack_service import SlackService
+from .jira_service import JiraService
 
 settings = Settings()
 
@@ -23,7 +25,7 @@ class ResolutionService:
 
     def __init__(self, session: Session):
         self.session = session
-        print("!!! RESOLUTION SERVICE VERSION 5.0 - INITIALIZED !!!")
+        print("!!! RESOLUTION SERVICE VERSION 6.0 - MULTI-TENANT !!!")
 
     def resolve_finding(self, finding_id: UUID, github_token: Optional[str] = None, force_sync: bool = False) -> ResolutionResponse:
         print(f"Attempting to resolve ID: {finding_id} (type: {type(finding_id)})")
@@ -35,9 +37,11 @@ class ResolutionService:
         
         if not finding:
             # Fallback for SQLite potential string mismatch (no hyphens)
-            # Use string representation comparison
             search_id = str(finding_id).replace("-", "")
-            findings = self.session.exec(select(Finding)).all()
+            # Only loading IDs and comparing is slightly better than loading all objects
+            # In a real app we'd use a custom SQL function or a specialized UUID type
+            stmt = select(Finding)
+            findings = self.session.exec(stmt).all()
             finding = next((f for f in findings if str(f.id).replace("-", "") == search_id), None)
 
         if finding and finding.is_fixed:
@@ -120,11 +124,23 @@ class ResolutionService:
             
         raw_env = os.getenv(f"{platform.upper()}_TOKEN")
         
+        # 5. Tenant settings (New)
+        raw_tenant = None
+        tenant = self.session.get(Tenant, scan.tenant_id)
+        if tenant:
+            if platform == "github":
+                raw_tenant = tenant.github_token
+            elif platform == "gitlab":
+                raw_tenant = tenant.gitlab_token
+            elif platform == "bitbucket":
+                raw_tenant = tenant.bitbucket_token
+        
         print(f"[{scan.id}] Platform: {platform}")
         print(f"[{scan.id}] 1. Payload: {'Present' if raw_payload else 'None/Empty'} (Len: {len(raw_payload) if raw_payload else 0})")
         print(f"[{scan.id}] 2. DB Scan: {'Present' if raw_db else 'None/Empty'} (Len: {len(raw_db) if raw_db else 0})")
-        print(f"[{scan.id}] 3. Settings ({platform}): {'Present' if raw_settings else 'None/Empty'} (Len: {len(raw_settings) if raw_settings else 0})")
-        print(f"[{scan.id}] 4. OS Env ({platform.upper()}_TOKEN): {'Present' if raw_env else 'None/Empty'} (Len: {len(raw_env) if raw_env else 0})")
+        print(f"[{scan.id}] 3. Tenant: {'Present' if raw_tenant else 'None/Empty'} (Len: {len(raw_tenant) if raw_tenant else 0})")
+        print(f"[{scan.id}] 4. Settings ({platform}): {'Present' if raw_settings else 'None/Empty'} (Len: {len(raw_settings) if raw_settings else 0})")
+        print(f"[{scan.id}] 5. OS Env ({platform.upper()}_TOKEN): {'Present' if raw_env else 'None/Empty'} (Len: {len(raw_env) if raw_env else 0})")
 
         token = None
         token_source = "None Found"
@@ -135,6 +151,9 @@ class ResolutionService:
         elif not token and raw_db and raw_db.strip():
             token = raw_db.strip()
             token_source = "Scan Model (DB)"
+        elif not token and raw_tenant and raw_tenant.strip():
+            token = raw_tenant.strip()
+            token_source = "Tenant Model"
         elif not token and raw_settings and raw_settings.strip():
             token = raw_settings.strip()
             token_source = f"App Settings ({platform})"
@@ -277,7 +296,8 @@ class ResolutionService:
                 token, 
                 is_bundled=True, 
                 count=resolved_count,
-                base_branch=default_branch
+                base_branch=default_branch,
+                tenant=tenant
             )
             
             if pr_url:
@@ -585,10 +605,15 @@ class ResolutionService:
             return "bitbucket", f"{parts[-2]}/{parts[-1]}"
         return "unknown", None
 
-    def _create_pull_request(self, repo_url: str, branch_name: str, finding: Finding, token: Optional[str], is_bundled: bool = False, count: int = 1, base_branch: str = "main") -> Optional[str]:
+    def _create_pull_request(self, repo_url: str, branch_name: str, finding: Finding, token: Optional[str], is_bundled: bool = False, count: int = 1, base_branch: str = "main", tenant: Optional[Tenant] = None) -> Optional[str]:
         """
         Creates a Pull Request / Merge Request on GitHub, GitLab, or Bitbucket.
         """
+        if not tenant:
+             tenant = self.session.get(Tenant, finding.tenant_id)
+        
+        slack_service = SlackService(tenant=tenant)
+        jira_service = JiraService(tenant=tenant)
         if not token:
             print(f"ERROR: No token provided for PR creation. github_token: {token is not None}, scan.git_token: {finding.scan.git_token if finding.scan else 'N/A'}, settings.github_token: {settings.github_token is not None}")
             return None
@@ -618,7 +643,12 @@ class ResolutionService:
                 response = requests.post(f"https://api.github.com/repos/{repo_id}/pulls", json=data, headers=headers)
                 print(f"DEBUG: GitHub API PR Creation Request: URL=https://api.github.com/repos/{repo_id}/pulls, Status={response.status_code}")
                 if response.status_code == 201:
-                    return response.json().get("html_url")
+                    pr_url = response.json().get("html_url")
+                    if pr_url:
+                        # Notify Slack and Create Jira Task
+                        slack_service.notify_pr_created(pr_url, finding.title, finding.severity)
+                        jira_service.create_vulnerability_task(finding.title, finding.description, pr_url)
+                    return pr_url
                 else:
                     print(f"DEBUG: GitHub API Response Error: {response.text}")
             
@@ -634,7 +664,11 @@ class ResolutionService:
                 encoded_id = quote_plus(repo_id)
                 response = requests.post(f"https://gitlab.com/api/v4/projects/{encoded_id}/merge_requests", json=data, headers=headers)
                 if response.status_code == 201:
-                    return response.json().get("web_url")
+                    pr_url = response.json().get("web_url")
+                    if pr_url:
+                        slack_service.notify_pr_created(pr_url, finding.title, finding.severity)
+                        jira_service.create_vulnerability_task(finding.title, finding.description, pr_url)
+                    return pr_url
 
             elif platform == "bitbucket":
                 headers = {"Authorization": f"Bearer {token}"}
@@ -646,7 +680,11 @@ class ResolutionService:
                 }
                 response = requests.post(f"https://api.bitbucket.org/2.0/repositories/{repo_id}/pullrequests", json=data, headers=headers)
                 if response.status_code == 201:
-                    return response.json().get("links", {}).get("html", {}).get("href")
+                    pr_url = response.json().get("links", {}).get("html", {}).get("href")
+                    if pr_url:
+                        slack_service.notify_pr_created(pr_url, finding.title, finding.severity)
+                        jira_service.create_vulnerability_task(finding.title, finding.description, pr_url)
+                    return pr_url
 
             print(f"Failed to create {platform} PR/MR: {response.status_code} {response.text}")
             return None

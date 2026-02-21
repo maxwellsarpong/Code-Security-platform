@@ -19,6 +19,15 @@ class Settings(BaseSettings):
     gitlab_token: Optional[str] = None
     bitbucket_token: Optional[str] = None
 
+    # Slack configuration
+    slack_webhook_url: Optional[str] = None
+
+    # Jira configuration
+    jira_url: Optional[str] = None
+    jira_email: Optional[str] = None
+    jira_api_token: Optional[str] = None
+    jira_project_key: Optional[str] = None
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

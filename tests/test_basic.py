@@ -22,7 +22,7 @@ def test_health(mock_session_class, mock_redis_from_url, client):
 
 
 @patch("app.services.scanner.schedule_scan")
-def test_create_and_poll_scan(mock_schedule_scan, client):
+def test_create_and_poll_scan(mock_schedule_scan, auth_client):
     """Test scan creation and polling with mocked scanner."""
     # Mock the schedule_scan function to avoid actual repo cloning
     # It should update the scan status in the database
@@ -41,6 +41,7 @@ def test_create_and_poll_scan(mock_schedule_scan, client):
                 # Add a mock finding
                 finding = Finding(
                     scan_id=scan.id,
+                    tenant_id=scan.tenant_id,
                     title="Mock Security Issue",
                     severity="MEDIUM",
                     description="This is a mock finding for testing",
@@ -56,7 +57,7 @@ def test_create_and_poll_scan(mock_schedule_scan, client):
     mock_schedule_scan.side_effect = mock_scan_execution
     
     # Create a scan
-    response = client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo"})
+    response = auth_client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo"})
     assert response.status_code == 201  # API returns 201 Created
     data = response.json()
     assert "id" in data
@@ -66,7 +67,7 @@ def test_create_and_poll_scan(mock_schedule_scan, client):
     scan_id = data["id"]
 
     # Poll the scan
-    response = client.get(f"/api/v1/scans/{scan_id}")
+    response = auth_client.get(f"/api/v1/scans/{scan_id}")
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == scan_id
@@ -75,3 +76,31 @@ def test_create_and_poll_scan(mock_schedule_scan, client):
     
     # Verify mock was called
     assert mock_schedule_scan.called
+
+
+@patch("app.services.scanner.schedule_scan")
+def test_create_tenant(mock_schedule_scan, client):
+    """Test creating a tenant."""
+    response = client.post("/api/v1/tenants?name=NewTenant")
+    assert response.status_code == 201
+    data = response.json()
+    assert "tenant_id" in data
+    assert "api_key" in data
+
+
+def test_list_tenants(client):
+    """Test listing all tenants."""
+    # 1. Create a few tenants
+    client.post("/api/v1/tenants?name=Tenant1")
+    client.post("/api/v1/tenants?name=Tenant2")
+    
+    # 2. List them
+    response = client.get("/api/v1/tenants")
+    assert response.status_code == 200
+    data = response.json()
+    
+    # 3. Verify
+    assert isinstance(data, list)
+    names = [t["name"] for t in data]
+    assert "Tenant1" in names
+    assert "Tenant2" in names

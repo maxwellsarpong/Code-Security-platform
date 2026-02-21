@@ -179,6 +179,7 @@ def schedule_scan(scan_id, tenant_id: Optional[str] = None):
         for finding_result in all_findings:
             finding = Finding(
                 scan_id=scan.id,
+                tenant_id=scan.tenant_id,
                 title=finding_result.title,
                 severity=finding_result.severity,
                 description=finding_result.description,

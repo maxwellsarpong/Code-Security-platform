@@ -43,3 +43,22 @@ def record_usage(tenant_id: str, scans: int = 0, billable_units: int = 0, sessio
     finally:
         if own_session:
             session.close()
+
+
+def renew_subscription(tenant_id: UUID, amount: float, session: Session):
+    """Renews a tenant's subscription by resetting their quota and recording a billing event."""
+    from ..core.rate_limiter import reset_monthly_quota
+    
+    # 1. Reset the rate limiter quota
+    reset_monthly_quota(str(tenant_id))
+    
+    # 2. Record the renewal event
+    evt = BillingEvent(
+        tenant_id=tenant_id, 
+        event_type="subscription_renewed", 
+        amount=amount, 
+        meta={"action": "monthly_manual_renewal"}
+    )
+    session.add(evt)
+    # We assume the caller will commit the session
+    return True

@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID
 
 @patch("app.services.scanner.schedule_scan")
-def test_findings_persistence_and_api_response(mock_schedule_scan, client):
+def test_findings_persistence_and_api_response(mock_schedule_scan, auth_client):
     """Test that findings are persisted and returned in the API response."""
     
     def mock_scan_execution(scan_id, tenant_id=None):
@@ -22,6 +22,7 @@ def test_findings_persistence_and_api_response(mock_schedule_scan, client):
                 # Add a mock finding with full metadata
                 finding = Finding(
                     scan_id=scan.id,
+                    tenant_id=scan.tenant_id,
                     title="Insecure Cryptographic Algorithm",
                     severity="HIGH",
                     description="The application uses MD5 which is insecure.",
@@ -38,12 +39,12 @@ def test_findings_persistence_and_api_response(mock_schedule_scan, client):
     mock_schedule_scan.side_effect = mock_scan_execution
     
     # 1. Create a scan
-    response = client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/vulnerable-repo"})
+    response = auth_client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/vulnerable-repo"})
     assert response.status_code == 201
     scan_id = response.json()["id"]
     
     # 2. Fetch the scan details
-    response = client.get(f"/api/v1/scans/{scan_id}")
+    response = auth_client.get(f"/api/v1/scans/{scan_id}")
     assert response.status_code == 200
     data = response.json()
     

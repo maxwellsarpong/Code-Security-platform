@@ -4,6 +4,46 @@ from uuid import UUID
 from datetime import datetime
 
 
+class UserCreate(BaseModel):
+    email: str
+    password: str
+    tenant_name: str  # Creating a user also creates a tenant for simplicity in this flow
+
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class UserRead(BaseModel):
+    id: UUID
+    email: str
+    tenant_id: UUID
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TenantRead(BaseModel):
+    id: UUID
+    name: str
+    plan: str
+    slack_webhook_url: Optional[str] = None
+    jira_url: Optional[str] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+
+class TokenData(BaseModel):
+    email: Optional[str] = None
+
+
 class ScanCreate(BaseModel):
     repo_url: HttpUrl
     git_token: Optional[str] = None
@@ -11,6 +51,7 @@ class ScanCreate(BaseModel):
 
 class FindingRead(BaseModel):
     id: UUID
+    scan_id: UUID
     title: str
     severity: str
     description: Optional[str]
@@ -29,6 +70,7 @@ class FindingRead(BaseModel):
 
 class ScanRead(BaseModel):
     id: UUID
+    tenant_id: UUID
     repo_url: HttpUrl
     status: str
     created_at: datetime

@@ -85,3 +85,23 @@ def check_rate_limit(tenant_id: str, route: str = "default", rate: int = 10, quo
             raise HTTPException(status_code=403, detail="monthly quota exceeded")
 
     return True
+
+
+def reset_monthly_quota(tenant_id: str):
+    """Resets the monthly quota for a tenant by deleting the quota key in Redis or memory."""
+    month = _now_month_key()
+    quota_key = f"quota:{tenant_id}:{month}"
+    
+    # Reset in Redis
+    try:
+        conn = Redis.from_url(REDIS_URL) if Redis is not None else None
+        if conn:
+            conn.delete(quota_key)
+    except Exception:
+        pass
+        
+    # Reset in Memory
+    if quota_key in _memory_counters:
+        del _memory_counters[quota_key]
+    
+    return True

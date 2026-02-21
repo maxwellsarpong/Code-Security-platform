@@ -4,14 +4,14 @@ from uuid import UUID
 from unittest.mock import patch
 
 @patch("app.services.scanner.schedule_scan")
-def test_list_scans(mock_schedule_scan, client):
+def test_list_scans(mock_schedule_scan, auth_client):
     """Test that listing scans returns a list of results."""
     # 1. Create a couple of scans
-    client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo1"})
-    client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo2"})
+    auth_client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo1"})
+    auth_client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo2"})
     
     # 2. Fetch the list
-    response = client.get("/api/v1/scans")
+    response = auth_client.get("/api/v1/scans")
     assert response.status_code == 200
     data = response.json()
     

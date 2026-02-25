@@ -6,14 +6,14 @@ from prometheus_client import REGISTRY
 
 
 def _metrics_contains(client, text: str) -> bool:
-    r = client.get("/metrics")
+    r = client.get("/api/v1/metrics")
     assert r.status_code == 200
     return text in r.text
 
 
 def test_metrics_endpoint_available(client):
     """Test that the /metrics endpoint is available."""
-    response = client.get("/metrics")
+    response = client.get("/api/v1/metrics")
     assert response.status_code == 200
     assert "text/plain" in response.headers["content-type"]
 

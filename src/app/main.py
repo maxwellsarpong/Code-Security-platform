@@ -8,7 +8,6 @@ from sqlmodel import Session, text
 import time
 
 # observability
-from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 import sentry_sdk
 
 settings = Settings()
@@ -93,8 +92,3 @@ def health(response: Response):
     return status
 
 
-@app.get("/metrics")
-def metrics():
-    """Prometheus metrics endpoint."""
-    data = generate_latest()
-    return Response(content=data, media_type=CONTENT_TYPE_LATEST)

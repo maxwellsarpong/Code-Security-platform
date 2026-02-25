@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, Response
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
@@ -11,6 +11,7 @@ from ..services.resolution import ResolutionService
 from ..services.billing import renew_subscription
 from .deps import get_tenant_from_api_key, get_tenant_no_quota, get_tenant_enforce_scan_quota
 import secrets
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 from . import auth
 
@@ -176,3 +177,10 @@ def renew_monthly_quota_subscription(
     session.commit()
     
     return {"status": "success", "message": f"Monthly quota renewed for tenant {tenant.name}"}
+
+
+@router.get("/metrics")
+def metrics():
+    """Prometheus metrics endpoint."""
+    data = generate_latest()
+    return Response(content=data, media_type=CONTENT_TYPE_LATEST)

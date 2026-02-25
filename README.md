@@ -168,7 +168,7 @@ docker compose up --build
 
 ## Observability (Prometheus + Sentry) 📈
 
-- API metrics: `GET /metrics` (Prometheus format)
+- API metrics: `GET /api/v1/metrics` (Prometheus format)
 - Worker metrics: exposed on `9100` by default when running the worker
 - Sentry: set `SENTRY_DSN` to enable error reporting from API & worker
 

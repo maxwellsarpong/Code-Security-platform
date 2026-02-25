@@ -28,48 +28,57 @@ class ResolutionService:
         print("!!! RESOLUTION SERVICE VERSION 6.0 - MULTI-TENANT !!!")
 
     def resolve_finding(self, finding_id: UUID, github_token: Optional[str] = None, force_sync: bool = False) -> ResolutionResponse:
-        print(f"Attempting to resolve ID: {finding_id} (type: {type(finding_id)})")
+        search_id = str(finding_id).replace("-", "")
+        print(f"!!! RESOLUTION !!! Attempting to resolve ID: {finding_id} (normalized: {search_id})")
         
         # 1. Try to find as a Finding
-        # Standard query with UUID object
-        stmt = select(Finding).where(Finding.id == finding_id)
-        finding = self.session.exec(stmt).first()
+        # Fast direct lookup (may fail depending on DB driver/type handling)
+        finding = self.session.get(Finding, finding_id)
         
         if not finding:
-            # Fallback for SQLite potential string mismatch (no hyphens)
-            search_id = str(finding_id).replace("-", "")
-            # Only loading IDs and comparing is slightly better than loading all objects
-            # In a real app we'd use a custom SQL function or a specialized UUID type
+            # Fallback for SQLite/String ID mismatch
             stmt = select(Finding)
             findings = self.session.exec(stmt).all()
             finding = next((f for f in findings if str(f.id).replace("-", "") == search_id), None)
+            
+            if finding:
+                print(f"DEBUG: Found finding {finding.id} via manual scan.")
 
-        if finding and finding.is_fixed:
-            return ResolutionResponse(
-                status="success",
-                finding_id=finding_id,
-                message=f"Finding {finding_id} is already fixed."
-            )
-        
-        elif (finding and not finding.is_fixed) and (finding.severity == "CRITICAL" or finding.severity == "HIGH" or finding.severity == "MEDIUM"):
-            worker_sync = os.getenv("WORKER_SYNC", "false").lower() in ("1", "true", "yes")
-            if worker_sync or force_sync:
-                return self._resolve_single_finding(finding, github_token)
-            else:
-                enqueue_resolution(str(finding_id), github_token)
+        if finding:
+            if finding.is_fixed:
                 return ResolutionResponse(
-                    status="queued",
+                    status="success",
                     finding_id=finding_id,
-                    message="Resolution task has been queued and is processing in the background."
+                    message=f"Finding {finding_id} is already fixed."
+                )
+            
+            # Use lower() for case-insensitive severity comparison
+            severity = finding.severity.upper()
+            if severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
+                worker_sync = os.getenv("WORKER_SYNC", "false").lower() in ("1", "true", "yes")
+                if worker_sync or force_sync:
+                    return self._resolve_single_finding(finding, github_token)
+                else:
+                    enqueue_resolution(str(finding_id), github_token)
+                    return ResolutionResponse(
+                        status="queued",
+                        finding_id=finding_id,
+                        message="Resolution task has been queued and is processing in the background."
+                    )
+            else:
+                return ResolutionResponse(
+                    status="failed",
+                    finding_id=finding_id,
+                    message=f"Finding {finding_id} has severity {severity}, which is not eligible for automated resolution (requires MEDIUM or higher)."
                 )
 
         # 2. Try to find as a Scan
-        stmt = select(Scan).where(Scan.id == finding_id)
-        scan = self.session.exec(stmt).first()
+        scan = self.session.get(Scan, finding_id)
         if not scan:
              scans = self.session.exec(select(Scan)).all()
-             search_id = str(finding_id).replace("-", "")
              scan = next((s for s in scans if str(s.id).replace("-", "") == search_id), None)
+             if scan:
+                 print(f"DEBUG: Found scan {scan.id} via manual scan.")
         
         if scan:
             # Check for worker sync env var or fallback
@@ -86,11 +95,11 @@ class ResolutionService:
                     message="Resolution task has been queued and is processing in the background."
                 )
 
-        print(f"ID {finding_id} not found as Finding or Scan.")
+        print(f"ID {finding_id} (normalized: {search_id}) not found as Finding or Scan.")
         return ResolutionResponse(
             status="failed",
             finding_id=finding_id,
-            message=f"ID {finding_id} not found as a Finding or a Scan."
+            message=f"ID {finding_id} was not found as a Finding or a Scan."
         )
 
     def _resolve_multiple_findings(self, scan: Scan, findings: list[Finding], github_token: Optional[str] = None) -> ResolutionResponse:
@@ -380,17 +389,18 @@ class ResolutionService:
                         print(f"[{finding.id}] Applying rule-based fix: Added CSRF token to Django form")
                         return fixed_content
 
-        # 5. Handle hardcoded password strings (Bandit B105)
-        if finding.title and "hardcoded_password_string" in finding.title.lower():
+        # 5. Handle hardcoded password strings (Bandit B105) or Django Secret Key
+        if finding.title and any(kw in finding.title.lower() for kw in ["hardcoded_password", "secret_key"]):
              import re
-             # Look for assignment like password = "..." or PASSWORD = '...'
-             pattern = r'([a-zA-Z0-9_]*password[a-zA-Z0-9_]*\s*=\s*)(["\'])(?:(?!\2).)+\2'
-             replacement = r"\1os.environ.get('PASSWORD', 'REPLACE_ME')"
+             # Look for assignment like password = "..." or SECRET_KEY = '...'
+             # Improved pattern to catch both password-like and SECRET_KEY variables
+             pattern = r'([a-zA-Z0-9_]*(?:password|secret_key|api_key|token)[a-zA-Z0-9_]*\s*=\s*)(["\'])(?:(?!\2).)+\2'
+             replacement = r"\1os.environ.get('SECRET_OR_PASSWORD', 'REPLACE_ME')"
              fixed_content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
              if fixed_content != content:
                  if "import os" not in fixed_content:
                      fixed_content = "import os\n" + fixed_content
-                 print(f"[{finding.id}] Applying rule-based fix: Replaced hardcoded password with os.environ.get")
+                 print(f"[{finding.id}] Applying rule-based fix: Replaced hardcoded secret with os.environ.get")
                  return fixed_content
 
         # 6. Handle unsafe JS Document methods (e.g. document.write)

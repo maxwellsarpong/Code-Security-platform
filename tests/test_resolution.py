@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
-from uuid import uuid4
+from uuid import uuid4, UUID
 from app.models import Scan, Finding, Tenant, APIKey
 
 def test_resolve_finding_endpoint(client, session):
@@ -14,7 +14,7 @@ def test_resolve_finding_endpoint(client, session):
     headers = {"x-api-key": api_key}
 
     # Setup: Create a scan and a finding
-    tenant_id = data["tenant_id"]
+    tenant_id = UUID(data["tenant_id"])
     scan = Scan(tenant_id=tenant_id, repo_url="https://github.com/test/repo", status="completed")
     session.add(scan)
     session.commit()

@@ -15,6 +15,10 @@ from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 from . import auth
 
+def normalize_id(target_id: UUID) -> str:
+    """Standardize UUID to non-hyphenated string for SQLite compatibility."""
+    return str(target_id).replace("-", "")
+
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
 
@@ -108,15 +112,14 @@ def resolve_finding(
     if not tenant:
         raise HTTPException(status_code=401, detail="Authentication required")
         
-    # Check if target_id is a Finding or a Scan and verify ownership
+    search_id_str = normalize_id(target_id)
+    
     # 1. Check Finding
     finding = session.get(Finding, target_id)
     if not finding:
-        # Fallback for UUID format issues in SQLite
-        search_id_str = str(target_id).replace("-", "")
-        # Try to find finding by string comparison if not found by UUID object
+        # Fallback for string comparison in SQLite
         findings = session.exec(select(Finding).where(Finding.tenant_id == tenant.id)).all()
-        finding = next((f for f in findings if str(f.id).replace("-", "") == search_id_str), None)
+        finding = next((f for f in findings if normalize_id(f.id) == search_id_str), None)
 
     if finding:
         if finding.tenant_id != tenant.id:
@@ -127,13 +130,16 @@ def resolve_finding(
         scan = session.get(Scan, target_id)
         if not scan:
              scans = session.exec(select(Scan).where(Scan.tenant_id == tenant.id)).all()
-             scan = next((s for s in scans if str(s.id).replace("-", "") == str(target_id).replace("-", "")), None)
+             scan = next((s for s in scans if normalize_id(s.id) == search_id_str), None)
 
         if scan:
             if scan.tenant_id != tenant.id:
                 raise HTTPException(status_code=403, detail="Forbidden")
         else:
-            raise HTTPException(status_code=404, detail=f"ID {target_id} not found as a Finding or a Scan")
+            raise HTTPException(
+                status_code=404, 
+                detail=f"Resource not found. ID {target_id} (normalized: {search_id_str}) does not match any Finding or Scan associated with your tenant."
+            )
 
     github_token = payload.github_token if payload else None
     if not github_token:
@@ -145,6 +151,8 @@ def resolve_finding(
     if response.status == "failed":
         if "not found" in response.message:
             raise HTTPException(status_code=404, detail=response.message)
+        if "severity" in response.message:
+            raise HTTPException(status_code=400, detail=response.message)
         raise HTTPException(status_code=500, detail=response.message)
     
     return response

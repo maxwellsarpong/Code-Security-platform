@@ -31,7 +31,7 @@ def test_rule_hardcoded_password(session):
     
     fixed = service._generate_fix(finding, Path("/tmp"), content=content)
     assert fixed is not None
-    assert "os.environ.get('PASSWORD', 'REPLACE_ME')" in fixed
+    assert "os.environ.get('SECRET_OR_PASSWORD', 'REPLACE_ME')" in fixed
     assert "import os" in fixed
 
 def test_rule_insecure_document_write(session):

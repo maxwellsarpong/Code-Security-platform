@@ -129,17 +129,19 @@ Use the `api_key` in the `x-api-key: <api_key>` header.
 #### Findings & Resolution
 - `GET /api/v1/findings/fixed`: List all successfully resolved vulnerabilities.
 - `POST /api/v1/findings/{target_id}/resolve`: Resolve vulnerabilities. Accepts either a **Finding ID** (to fix one) or a **Scan ID** (to fix all in that scan).
+  - Use `?force_sync=true` to wait for the resolution result synchronously (useful for automation/verification).
   ```bash
-  curl -X POST http://localhost:8000/api/v1/findings/<ID>/resolve \
+  curl -X POST "http://localhost:8000/api/v1/findings/<ID>/resolve?force_sync=true" \
        -H "Authorization: Bearer <JWT_TOKEN>" \
        -H "Content-Type: application/json" \
-       -d '{ "github_token": "your_personal_access_token_if_not_in_settings" }'
+       -d '{ "github_token": "your_personal_access_token" }'
   ```
 
 #### Tenants & Usage
 - `GET /api/v1/tenants`: List all tenants in the system.
 - `POST /api/v1/tenants`: Create a tenant and API key (Scaffold).
-- `GET /api/v1/tenants/{tenant_id}/usage`: Retrieve usage stats for a tenant.
+- `GET /api/v1/tenants/{tenant_id}/usage`: Retrieve detailed usage stats for a tenant.
+  - Returns `scans_count`, `resolutions_count`, `quota_limit`, and `percentage_credit_left`.
 - `POST /api/v1/tenants/subscription/renew`: Manually renew the monthly quota subscription for the current tenant.
   ```bash
   curl -X POST http://localhost:8000/api/v1/tenants/subscription/renew?amount=100.0 \

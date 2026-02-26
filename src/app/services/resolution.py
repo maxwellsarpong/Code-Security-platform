@@ -323,6 +323,15 @@ class ResolutionService:
 
             print(f"[{scan.id}] STATUS: COMPLETED - {resolved_count} fixes applied. PR: {pr_url}")
 
+            # Record billing for resolution
+            if pr_url:
+                try:
+                    from .billing import record_usage
+                    record_usage(tenant_id=scan.tenant_id, resolutions=1, session=self.session)
+                except Exception as e:
+                    print(f"[{scan.id}] Failed to record resolution usage: {e}")
+
+
             return ResolutionResponse(
                 status="success",
                 pr_url=pr_url,

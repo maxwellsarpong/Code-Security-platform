@@ -1,7 +1,7 @@
 from pydantic import BaseModel, HttpUrl, ConfigDict
 from typing import Optional, List
 from uuid import UUID
-from datetime import datetime
+from datetime import datetime, date
 
 
 class UserCreate(BaseModel):
@@ -91,3 +91,18 @@ class ResolutionResponse(BaseModel):
     finding_id: UUID
     message: str
 
+
+class UsageRead(BaseModel):
+    date: date
+    scans_count: int
+    resolutions_count: int
+    billable_units: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TenantUsageResponse(BaseModel):
+    usage: List[UsageRead]
+    percentage_credit_left: float
+    quota_limit: int
+    current_month_usage: int

@@ -77,8 +77,13 @@ def get_tenant_enforce_quota(
     if current_user:
         tenant = session.get(Tenant, current_user.tenant_id)
         if tenant:
+            # Differentiate rate limit buckets: 'scans' for writes (quota-sensitive) vs 'api' for reads
+            route_name = "scans" if enforce_quota else "api"
+            # Give more headroom for read-only operations (default 5x)
+            effective_rate = tenant.rate_limit_per_minute if enforce_quota else tenant.rate_limit_per_minute * 5
             q = tenant.quota_per_month if enforce_quota else None
-            check_rate_limit(tenant_id=str(tenant.id), route="scans", rate=tenant.rate_limit_per_minute, quota_per_month=q)
+            
+            check_rate_limit(tenant_id=str(tenant.id), route=route_name, rate=effective_rate, quota_per_month=q)
             return tenant
 
     # 2. Fallback to API Key
@@ -97,6 +102,9 @@ def get_tenant_enforce_quota(
         raise HTTPException(status_code=401, detail="tenant not found")
 
     # enforce per-tenant rate limit and quota
+    route_name = "scans" if enforce_quota else "api"
+    effective_rate = tenant.rate_limit_per_minute if enforce_quota else tenant.rate_limit_per_minute * 5
     q = tenant.quota_per_month if enforce_quota else None
-    check_rate_limit(tenant_id=str(tenant.id), route="scans", rate=tenant.rate_limit_per_minute, quota_per_month=q)
+    
+    check_rate_limit(tenant_id=str(tenant.id), route=route_name, rate=effective_rate, quota_per_month=q)
     return tenant

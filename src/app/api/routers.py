@@ -3,7 +3,8 @@ from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from uuid import UUID
-from ..schemas import ScanCreate, ScanRead, ResolutionRequest, ResolutionResponse, FindingRead
+from datetime import date
+from ..schemas import ScanCreate, ScanRead, ResolutionRequest, ResolutionResponse, FindingRead, UsageRead, TenantUsageResponse
 from ..models import Scan, Tenant, APIKey, Usage, Finding
 from ..core.db import get_session
 from ..services.scanner import enqueue_scan, get_scan_result
@@ -44,15 +45,36 @@ def list_tenants(session: Session = Depends(get_session)):
     return tenants
 
 
-@router.get('/tenants/{tenant_id}/usage')
+@router.get('/tenants/{tenant_id}/usage', response_model=TenantUsageResponse)
 def get_tenant_usage(tenant_id: UUID, session: Session = Depends(get_session), tenant: Tenant = Depends(get_tenant_from_api_key)):
     # Enforce isolation: can only view own usage
-    if tenant and tenant.id != tenant_id:
+    if not tenant:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    if tenant.id != tenant_id:
         raise HTTPException(status_code=403, detail="Not authorized for this tenant")
     
-    stmt = select(Usage).where(Usage.tenant_id == tenant_id)
+    # Get all usage records for history
+    stmt = select(Usage).where(Usage.tenant_id == tenant_id).order_by(Usage.date.desc())
     rows = session.exec(stmt).all()
-    return rows
+    
+    # Calculate current month's usage
+    today = date.today()
+    first_of_month = today.replace(day=1)
+    
+    monthly_stmt = select(Usage).where(Usage.tenant_id == tenant_id, Usage.date >= first_of_month)
+    monthly_rows = session.exec(monthly_stmt).all()
+    
+    month_usage = sum((r.scans_count or 0) + (r.resolutions_count or 0) for r in monthly_rows)
+    quota = tenant.quota_per_month or 100 # default fallback
+    
+    percentage_left = max(0.0, ((quota - month_usage) / quota) * 100)
+    
+    return {
+        "usage": rows,
+        "percentage_credit_left": round(percentage_left, 2),
+        "quota_limit": quota,
+        "current_month_usage": month_usage
+    }
 
 
 @router.post("/scans", response_model=ScanRead, status_code=201)
@@ -103,6 +125,7 @@ def read_scan(scan_id: UUID, session: Session = Depends(get_session), tenant: Te
 def resolve_finding(
     target_id: UUID, 
     payload: Optional[ResolutionRequest] = None,
+    force_sync: bool = False,
     session: Session = Depends(get_session),
     tenant: Tenant = Depends(get_tenant_enforce_scan_quota)
 ):
@@ -146,7 +169,7 @@ def resolve_finding(
         github_token = tenant.github_token
         
     service = ResolutionService(session)
-    response = service.resolve_finding(target_id, github_token=github_token)
+    response = service.resolve_finding(target_id, github_token=github_token, force_sync=force_sync)
     
     if response.status == "failed":
         if "not found" in response.message:

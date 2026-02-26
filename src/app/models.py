@@ -94,6 +94,7 @@ class Usage(SQLModel, table=True):
     tenant_id: UUID = Field(foreign_key="tenant.id")
     date: date
     scans_count: int = 0
+    resolutions_count: int = 0
     billable_units: int = 0
 
 

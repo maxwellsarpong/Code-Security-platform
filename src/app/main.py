@@ -22,7 +22,7 @@ app = FastAPI(title="security-compliance-platform - scanner API")
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["http://localhost:5173"],  # Allow unified frontend origin
     allow_credentials=True,
     allow_methods=["*"],  # Allows all methods (GET, POST, OPTIONS, etc.)
     allow_headers=["*"],  # Allows all headers

@@ -6,7 +6,7 @@ from datetime import date
 from uuid import UUID
 
 
-def record_usage(tenant_id: str, scans: int = 0, billable_units: int = 0, session: Session | None = None):
+def record_usage(tenant_id: str, scans: int = 0, resolutions: int = 0, billable_units: int = 0, session: Session | None = None):
     """Record usage for tenant — increments daily Usage and creates a BillingEvent.
 
     If a session is provided the function will use it; otherwise it will open its own.
@@ -27,15 +27,28 @@ def record_usage(tenant_id: str, scans: int = 0, billable_units: int = 0, sessio
         stmt = select(Usage).where(Usage.tenant_id == tenant_id, Usage.date == today)
         row = session.exec(stmt).one_or_none()
         if not row:
-            row = Usage(tenant_id=tenant_id, date=today, scans_count=scans, billable_units=billable_units)
+            row = Usage(
+                tenant_id=tenant_id, 
+                date=today, 
+                scans_count=scans, 
+                resolutions_count=resolutions,
+                billable_units=billable_units
+            )
             session.add(row)
         else:
             row.scans_count = (row.scans_count or 0) + scans
+            row.resolutions_count = (row.resolutions_count or 0) + resolutions
             row.billable_units = (row.billable_units or 0) + billable_units
             session.add(row)
 
-        # create billing event (simple metering event)
-        evt = BillingEvent(tenant_id=tenant_id, event_type="scan_completed", amount=0.0, meta={"scans": scans, "units": billable_units})
+        # create billing event
+        event_type = "scan_completed" if scans > 0 else "resolution_completed"
+        evt = BillingEvent(
+            tenant_id=tenant_id, 
+            event_type=event_type, 
+            amount=0.0, 
+            meta={"scans": scans, "resolutions": resolutions, "units": billable_units}
+        )
         session.add(evt)
         if own_session:
             session.commit()

@@ -61,92 +61,128 @@ docker compose up --build
 # API -> http://localhost:8000
 ```
 
-### Authentication & Multi-tenancy
+### Authentication
 
-The platform supports multi-tenancy via **JWT Authentication** (for users) and **API Keys** (for automated services).
+The platform supports **JWT Authentication** (via login) and **API Key Authentication** (for automated services).
 
 #### 1. Register & Login (JWT)
 
-First, register a new user. This will automatically create a new tenant for you.
-
 ```bash
+# Register
 curl -X POST http://localhost:8000/api/v1/auth/register \
      -H "Content-Type: application/json" \
-     -d '{
-       "email": "user@example.com",
-       "password": "yourpassword",
-       "tenant_name": "Acme Corp"
-     }'
-```
+     -d '{ "email": "user@example.com", "password": "yourpassword" }'
 
-Then, login to receive your access token (JSON supported):
-
-```bash
+# Login
 curl -X POST http://localhost:8000/api/v1/auth/login \
      -H "Content-Type: application/json" \
-     -d '{
-       "email": "user@example.com",
-       "password": "yourpassword"
-     }'
+     -d '{ "email": "user@example.com", "password": "yourpassword" }'
+# Response: { "access_token": "...", "token_type": "bearer" }
 ```
 
-Response: `{ "access_token": "...", "token_type": "bearer" }`
+Use the `access_token` in the `Authorization: Bearer <token>` header for all subsequent requests.
 
-Use the `access_token` in the `Authorization: Bearer <token>` header for subsequent requests.
+#### 2. API Key Authentication
 
-#### 2. API Key Authentication (Fallback)
-
-For automated services, use `/token` with form-data (standard OAuth2) or an API key:
+Generate an API key after logging in (`POST /api/v1/user/api-key`), then use it via the `x-api-key` header:
 
 ```bash
-# OAuth2 Token endpoint (form-data)
-curl -X POST http://localhost:8000/api/v1/auth/token \
-     -d "username=user@example.com&password=yourpassword"
+curl http://localhost:8000/api/v1/scans \
+     -H "x-api-key: <YOUR_API_KEY>"
 ```
-
-Use the `api_key` in the `x-api-key: <api_key>` header.
 
 ---
 
 ### API Reference
 
+All protected endpoints accept either `Authorization: Bearer <JWT_TOKEN>` or `x-api-key: <API_KEY>`.
+
 #### Authentication
-- `POST /api/v1/auth/register`: Register user & tenant.
-- `POST /api/v1/auth/login`: Login to get JWT (JSON).
-- `POST /api/v1/auth/token`: OAuth2 legacy login (Form-data).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/v1/auth/register` | Register a new user account |
+| `POST` | `/api/v1/auth/login` | JSON login — returns a JWT. Returns `404` if the email is not found, `401` for a wrong password |
+| `POST` | `/api/v1/auth/token` | OAuth2 form-data login — returns a JWT |
+
+```bash
+# Register
+curl -X POST http://localhost:8000/api/v1/auth/register \
+     -H "Content-Type: application/json" \
+     -d '{ "email": "user@example.com", "password": "yourpassword" }'
+
+# Login (JSON)
+curl -X POST http://localhost:8000/api/v1/auth/login \
+     -H "Content-Type: application/json" \
+     -d '{ "email": "user@example.com", "password": "yourpassword" }'
+# Response: { "access_token": "...", "token_type": "bearer" }
+```
+
+---
+
+#### User
+
+| Method | Endpoint | Auth Required | Description |
+|--------|----------|---------------|-------------|
+| `GET` | `/api/v1/user/profile` | ✅ | Get profile and quota info for the authenticated user |
+| `GET` | `/api/v1/user/usage` | ✅ | Get usage history and current-month credit summary |
+| `POST` | `/api/v1/user/api-key` | ✅ | Generate a new API key for the authenticated user |
+| `POST` | `/api/v1/user/subscription/renew` | ✅ | Renew monthly quota (optionally pass `?amount=100.0`) |
+
+```bash
+# Get usage
+curl http://localhost:8000/api/v1/user/usage \
+     -H "Authorization: Bearer <JWT_TOKEN>"
+
+# Renew quota
+curl -X POST "http://localhost:8000/api/v1/user/subscription/renew?amount=100.0" \
+     -H "Authorization: Bearer <JWT_TOKEN>"
+```
+
+---
 
 #### Scans
-- `POST /api/v1/scans`: Start a new security scan.
-  ```bash
-  curl -X POST http://localhost:8000/api/v1/scans \
-       -H "Authorization: Bearer <JWT_TOKEN>" \
-       -H "Content-Type: application/json" \
-       -d '{ "repo_url": "https://github.com/owner/repo" }'
-  ```
-- `GET /api/v1/scans`: List all scans for the tenant.
-- `GET /api/v1/scans/{scan_id}`: Get details of a specific scan.
+
+| Method | Endpoint | Auth Required | Description |
+|--------|----------|---------------|-------------|
+| `POST` | `/api/v1/scans` | ✅ (quota enforced) | Start a new security scan |
+| `GET` | `/api/v1/scans` | ✅ | List all scans for the authenticated user |
+| `GET` | `/api/v1/scans/{scan_id}` | ✅ | Get details of a specific scan |
+
+```bash
+# Start a scan
+curl -X POST http://localhost:8000/api/v1/scans \
+     -H "Authorization: Bearer <JWT_TOKEN>" \
+     -H "Content-Type: application/json" \
+     -d '{ "repo_url": "https://github.com/owner/repo" }'
+```
+
+---
 
 #### Findings & Resolution
-- `GET /api/v1/findings/fixed`: List all successfully resolved vulnerabilities.
-- `POST /api/v1/findings/{target_id}/resolve`: Resolve vulnerabilities. Accepts either a **Finding ID** (to fix one) or a **Scan ID** (to fix all in that scan).
-  - Use `?force_sync=true` to wait for the resolution result synchronously (useful for automation/verification).
-  ```bash
-  curl -X POST "http://localhost:8000/api/v1/findings/<ID>/resolve?force_sync=true" \
-       -H "Authorization: Bearer <JWT_TOKEN>" \
-       -H "Content-Type: application/json" \
-       -d '{ "github_token": "your_personal_access_token" }'
-  ```
 
-#### Tenants & Usage
-- `GET /api/v1/tenants`: List all tenants in the system.
-- `POST /api/v1/tenants`: Create a tenant and API key (Scaffold).
-- `GET /api/v1/tenants/{tenant_id}/usage`: Retrieve detailed usage stats for a tenant.
-  - Returns `scans_count`, `resolutions_count`, `quota_limit`, and `percentage_credit_left`.
-- `POST /api/v1/tenants/subscription/renew`: Manually renew the monthly quota subscription for the current tenant.
-  ```bash
-  curl -X POST http://localhost:8000/api/v1/tenants/subscription/renew?amount=100.0 \
-       -H "x-api-key: <YOUR_API_KEY>"
-  ```
+| Method | Endpoint | Auth Required | Description |
+|--------|----------|---------------|-------------|
+| `GET` | `/api/v1/findings/fixed` | ✅ | List all successfully resolved vulnerabilities |
+| `POST` | `/api/v1/findings/{target_id}/resolve` | ✅ (quota enforced) | Resolve a finding or all findings in a scan |
+
+Pass a **Finding ID** to fix one vulnerability or a **Scan ID** to fix all findings in that scan.  
+Add `?force_sync=true` to wait for the result synchronously.
+
+```bash
+curl -X POST "http://localhost:8000/api/v1/findings/<ID>/resolve?force_sync=true" \
+     -H "Authorization: Bearer <JWT_TOKEN>" \
+     -H "Content-Type: application/json" \
+     -d '{ "github_token": "your_personal_access_token" }'
+```
+
+---
+
+#### Observability
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/api/v1/metrics` | Prometheus metrics (CPU, request counts, latencies, etc.) |
 
 ---
 

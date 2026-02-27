@@ -22,7 +22,7 @@ def test_metrics_endpoint_available(client):
 def test_scan_increments_metrics(mock_schedule_scan, auth_client):
     """Test that creating a scan increments Prometheus metrics."""
     # Mock the schedule_scan function to avoid actual repo cloning
-    def mock_scan_execution(scan_id, tenant_id=None):
+    def mock_scan_execution(scan_id, user_id=None):
         from app.core.db import engine
         from sqlmodel import Session
         from app.models import Scan, Finding
@@ -37,7 +37,7 @@ def test_scan_increments_metrics(mock_schedule_scan, auth_client):
                 # Add a mock finding
                 finding = Finding(
                     scan_id=scan.id,
-                    tenant_id=scan.tenant_id,
+                    user_id=scan.user_id,
                     title="Mock Security Issue",
                     severity="LOW",
                     description="This is a mock finding for testing",

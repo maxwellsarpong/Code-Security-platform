@@ -51,16 +51,16 @@ def _incr_memory(key: str, window_seconds: int):
     return bucket[0]
 
 
-def check_rate_limit(tenant_id: str, route: str = "default", rate: int = 10, quota_per_month: Optional[int] = None):
+def check_rate_limit(user_id: str, route: str = "default", rate: int = 10, quota_per_month: Optional[int] = None):
     """Raises HTTPException(429) when rate limit or quota is exceeded.
 
-    - tenant_id: string (use '__anon__' for anonymous)
+    - user_id: string (use '__anon__' for anonymous)
     - rate: allowed requests per minute
     - quota_per_month: allowed scans per month (optional)
     """
     # rate (per-minute)
     window = 60
-    minute_key = f"rl:{tenant_id}:{route}:{int(time.time()//60)}"
+    minute_key = f"rl:{user_id}:{route}:{int(time.time()//60)}"
     try:
         val = _incr_redis(minute_key, window) if Redis is not None else None
     except Exception:
@@ -74,7 +74,7 @@ def check_rate_limit(tenant_id: str, route: str = "default", rate: int = 10, quo
     # monthly quota check (only for scans route)
     if quota_per_month is not None and route == "scans":
         month = _now_month_key()
-        quota_key = f"quota:{tenant_id}:{month}"
+        quota_key = f"quota:{user_id}:{month}"
         try:
             qv = _incr_redis(quota_key, 60 * 60 * 24 * 31) if Redis is not None else None
         except Exception:
@@ -87,10 +87,10 @@ def check_rate_limit(tenant_id: str, route: str = "default", rate: int = 10, quo
     return True
 
 
-def reset_monthly_quota(tenant_id: str):
-    """Resets the monthly quota for a tenant by deleting the quota key in Redis or memory."""
+def reset_monthly_quota(user_id: str):
+    """Resets the monthly quota for a user by deleting the quota key in Redis or memory."""
     month = _now_month_key()
-    quota_key = f"quota:{tenant_id}:{month}"
+    quota_key = f"quota:{user_id}:{month}"
     
     # Reset in Redis
     try:

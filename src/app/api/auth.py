@@ -3,7 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from ..core.db import get_session
 from ..core.auth import get_password_hash, verify_password, create_access_token
-from ..models import User, Tenant
+from ..models import User
 from ..schemas import UserCreate, UserRead, Token, LoginRequest
 
 router = APIRouter()
@@ -20,18 +20,12 @@ def register(user_in: UserCreate, session: Session = Depends(get_session)):
             detail="User with this email already exists",
         )
     
-    # Create Tenant
-    tenant = Tenant(name=user_in.tenant_name)
-    session.add(tenant)
-    session.commit()
-    session.refresh(tenant)
     
     # Create User
     hashed_password = get_password_hash(user_in.password)
     user = User(
         email=user_in.email,
-        hashed_password=hashed_password,
-        tenant_id=tenant.id
+        hashed_password=hashed_password
     )
     session.add(user)
     session.commit()
@@ -62,7 +56,7 @@ def _perform_login(email: str, password: str, session: Session) -> dict:
     user = session.exec(statement).first()
     if not user or not verify_password(password, user.hashed_password):
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_404_NOT_FOUND,
             detail="Incorrect email or password",
             headers={"WWW-Authenticate": "Bearer"},
         )

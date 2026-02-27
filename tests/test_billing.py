@@ -7,7 +7,7 @@ from datetime import datetime
 def test_billing_recorded_after_scan(mock_schedule_scan, client):
     """Test that billing is recorded after a scan completes."""
     # Mock the schedule_scan function to avoid actual repo cloning
-    def mock_scan_execution(scan_id, tenant_id=None):
+    def mock_scan_execution(scan_id, user_id=None):
         from app.core.db import engine
         from sqlmodel import Session
         from app.models import Scan, Finding
@@ -22,7 +22,7 @@ def test_billing_recorded_after_scan(mock_schedule_scan, client):
                 # Add a mock finding
                 finding = Finding(
                     scan_id=scan.id,
-                    tenant_id=scan.tenant_id,
+                    user_id=scan.user_id,
                     title="Mock Security Issue",
                     severity="HIGH",
                     description="This is a mock finding for testing",
@@ -35,14 +35,30 @@ def test_billing_recorded_after_scan(mock_schedule_scan, client):
     
     mock_schedule_scan.side_effect = mock_scan_execution
     
-    # Create a tenant via API
-    response = client.post("/api/v1/tenants?name=billing-test&rate_limit_per_minute=10&quota_per_month=100")
+    # Create a user via API
+    client.post("/api/v1/auth/register", json={"email": "billing-test@example.com", "password": "pwd"})
+    token_resp = client.post("/api/v1/auth/token", data={"username": "billing-test@example.com", "password": "pwd"})
+    token = token_resp.json()["access_token"]
+    response = client.post("/api/v1/user/api-key", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 201
     body = response.json()
     api_key = body["api_key"]
-    tenant_id = body["tenant_id"]
+    
+    # Get user id from profile to configure rate limit and for checks
+    profile_response = client.get("/api/v1/user/profile", headers={"Authorization": f"Bearer {token}"})
+    user_id = profile_response.json()["id"]
+    
+    from app.core.db import engine
+    from sqlmodel import Session, select
+    from app.models import User
+    with Session(engine) as session:
+        user = session.exec(select(User).where(User.email == "billing-test@example.com")).first()
+        user.rate_limit_per_minute = 10
+        user.quota_per_month = 100
+        session.add(user)
+        session.commit()
+        
     headers = {"x-api-key": api_key}
-\
     # Create a scan with tenant API key
     response = client.post("/api/v1/scans", json={"repo_url": "https://github.com/example/repo"}, headers=headers)
     assert response.status_code == 201

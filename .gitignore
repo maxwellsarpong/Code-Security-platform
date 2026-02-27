@@ -16,3 +16,4 @@ test_output.txt
 test_billing_debug.txt
 verify_fix.py
 verify_billing.py
+dump_schema.py

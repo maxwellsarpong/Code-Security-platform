@@ -1,16 +1,16 @@
 import requests
 from typing import Optional
 from ..core.config import Settings
-from ..models import Tenant
+from ..models import User
 
 settings = Settings()
 
 class SlackService:
-    def __init__(self, webhook_url: Optional[str] = None, tenant: Optional[Tenant] = None):
+    def __init__(self, webhook_url: Optional[str] = None, user: Optional[User] = None):
         if webhook_url:
             self.webhook_url = webhook_url
-        elif tenant and tenant.slack_webhook_url:
-            self.webhook_url = tenant.slack_webhook_url
+        elif user and user.slack_webhook_url:
+            self.webhook_url = user.slack_webhook_url
         else:
             self.webhook_url = settings.slack_webhook_url
 

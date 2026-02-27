@@ -38,26 +38,25 @@ SCAN_DURATION = Histogram("scp_scan_duration_seconds", "Scan run duration second
 _scan_index: Dict[str, Dict[str, Any]] = {}
 
 
-def enqueue_scan(scan_id, tenant_id: Optional[str] = None):
+def enqueue_scan(scan_id, user_id: Optional[str] = None):
     """Enqueue a scan job to Redis/RQ when available.
     Falls back to synchronous execution when WORKER_SYNC=true or Redis isn't available (useful for local/dev/CI).
     """
     SCANS_ENQUEUED.inc()
     worker_sync = os.getenv("WORKER_SYNC", "false").lower() in ("1", "true", "yes")
     if worker_sync or Redis is None or Queue is None:
-        # synchronous fallback for dev and CI
-        return schedule_scan(scan_id, tenant_id=tenant_id)
+        return schedule_scan(scan_id, user_id=user_id)
 
     try:
         conn = Redis.from_url(REDIS_URL, decode_responses=True)
         q = Queue(name="scans", connection=conn)
         # enqueue the function by import path so worker can import it
         retry_policy = Retry(max=3, interval=[10, 30, 60]) if Retry is not None else None
-        q.enqueue("app.services.scanner.schedule_scan", scan_id, tenant_id, retry=retry_policy, job_timeout=300)
+        q.enqueue("app.services.scanner.schedule_scan", scan_id, user_id, retry=retry_policy, job_timeout=300)
         return True
     except Exception:
         # if enqueue fails, run sync as a best-effort fallback
-        return schedule_scan(scan_id, tenant_id=tenant_id)
+        return schedule_scan(scan_id, user_id=user_id)
 
 
 def _record_failure(exc):
@@ -68,14 +67,14 @@ def _record_failure(exc):
 
 
 @SCAN_DURATION.time()
-def schedule_scan(scan_id, tenant_id: Optional[str] = None):
+def schedule_scan(scan_id, user_id: Optional[str] = None):
     """
     Execute a scan job with real security scanners.
     Clones repository, runs applicable scanners, aggregates findings.
 
     Args:
         scan_id: UUID of the scan
-        tenant_id: Optional tenant ID for billing
+        user_id: Optional user ID for billing
     """
     SCANS_STARTED.inc()
     start_time = time.time()
@@ -179,7 +178,7 @@ def schedule_scan(scan_id, tenant_id: Optional[str] = None):
         for finding_result in all_findings:
             finding = Finding(
                 scan_id=scan.id,
-                tenant_id=scan.tenant_id,
+                user_id=scan.user_id,
                 title=finding_result.title,
                 severity=finding_result.severity,
                 description=finding_result.description,
@@ -210,10 +209,10 @@ def schedule_scan(scan_id, tenant_id: Optional[str] = None):
         SCAN_DURATION.observe(duration)
 
         # Record billing
-        if tenant_id:
+        if user_id:
             try:
                 from .billing import record_usage  # local import to avoid cycle in tests
-                record_usage(tenant_id=tenant_id, scans=1, billable_units=1)
+                record_usage(user_id=user_id, scans=1, billable_units=1)
             except Exception as e:
                 _record_failure(e)
 

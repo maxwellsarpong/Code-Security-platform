@@ -3,7 +3,7 @@ from uuid import UUID
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 from app.main import app
-from app.models import Tenant, User
+from app.models import User
 
 
 def test_registration_and_login(client: TestClient):
@@ -12,14 +12,13 @@ def test_registration_and_login(client: TestClient):
         "/api/v1/auth/register",
         json={
             "email": "test@example.com",
-            "password": "password123",
-            "tenant_name": "Test Tenant"
+            "password": "password123"
         }
     )
     assert response.status_code == 200
     data = response.json()
     assert data["email"] == "test@example.com"
-    assert "tenant_id" in data
+    assert "id" in data
 
     # 2. Login
     response = client.post(
@@ -49,7 +48,7 @@ def test_tenant_isolation(mock_clone, client: TestClient):
     # 1. Register Tenant A
     client.post(
         "/api/v1/auth/register",
-        json={"email": "a@example.com", "password": "pwd", "tenant_name": "A"}
+        json={"email": "a@example.com", "password": "pwd"}
     )
     token_a = client.post(
         "/api/v1/auth/token",
@@ -59,7 +58,7 @@ def test_tenant_isolation(mock_clone, client: TestClient):
     # 2. Register Tenant B
     client.post(
         "/api/v1/auth/register",
-        json={"email": "b@example.com", "password": "pwd", "tenant_name": "B"}
+        json={"email": "b@example.com", "password": "pwd"}
     )
     token_b = client.post(
         "/api/v1/auth/token",
@@ -99,8 +98,7 @@ def test_tenant_settings_usage(mock_resolve, mock_jira, mock_slack, mock_clone, 
         "/api/v1/auth/register",
         json={
             "email": "t@example.com", 
-            "password": "pwd", 
-            "tenant_name": "T"
+            "password": "pwd"
         }
     )
     token = client.post(
@@ -114,13 +112,13 @@ def test_tenant_settings_usage(mock_resolve, mock_jira, mock_slack, mock_clone, 
     from app.core.db import engine as db_engine
     from sqlmodel import Session, select
     with Session(db_engine) as session:
-        tenant = session.exec(select(Tenant).where(Tenant.name == "T")).first()
-        tenant.slack_webhook_url = "https://tenant-slack.com"
-        tenant.jira_url = "https://tenant-jira.com"
-        session.add(tenant)
+        user = session.exec(select(User).where(User.email == "t@example.com")).first()
+        user.slack_webhook_url = "https://tenant-slack.com"
+        user.jira_url = "https://tenant-jira.com"
+        session.add(user)
         session.commit()
-        session.refresh(tenant)
-        tenant_id = tenant.id
+        session.refresh(user)
+        user_id = user.id
     
     # 3. Create a scan and a finding
     resp = client.post("/api/v1/scans", json={"repo_url": "https://github.com/org/repo"}, headers=headers)
@@ -130,7 +128,7 @@ def test_tenant_settings_usage(mock_resolve, mock_jira, mock_slack, mock_clone, 
         from app.models import Finding
         finding = Finding(
             scan_id=scan_id, 
-            tenant_id=tenant_id, 
+            user_id=user_id, 
             title="Vulnerability", 
             severity="HIGH"
         )
@@ -157,18 +155,18 @@ def test_tenant_settings_usage(mock_resolve, mock_jira, mock_slack, mock_clone, 
                 "branch", 
                 finding, 
                 "token", 
-                tenant=tenant
+                user=user
             )
             
             # Verify SlackService was initialized with tenant
             mock_slack.assert_called_once()
             args, kwargs = mock_slack.call_args
-            assert kwargs["tenant"].id == tenant_id
+            assert kwargs["user"].id == user_id
             
             # Verify JiraService was initialized with tenant
             mock_jira.assert_called_once()
             args, kwargs = mock_jira.call_args
-            assert kwargs["tenant"].id == tenant_id
+            assert kwargs["user"].id == user_id
 
 
 def test_scan_id_resolution_routing(client: TestClient):
@@ -176,7 +174,7 @@ def test_scan_id_resolution_routing(client: TestClient):
     # 1. Register and login
     client.post(
         "/api/v1/auth/register",
-        json={"email": "s@example.com", "password": "pwd", "tenant_name": "S"}
+        json={"email": "s@example.com", "password": "pwd"}
     )
     token = client.post(
         "/api/v1/auth/token",

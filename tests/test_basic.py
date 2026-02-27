@@ -26,7 +26,7 @@ def test_create_and_poll_scan(mock_schedule_scan, auth_client):
     """Test scan creation and polling with mocked scanner."""
     # Mock the schedule_scan function to avoid actual repo cloning
     # It should update the scan status in the database
-    def mock_scan_execution(scan_id, tenant_id=None):
+    def mock_scan_execution(scan_id, user_id=None):
         from app.core.db import engine
         from sqlmodel import Session
         from app.models import Scan, Finding
@@ -41,7 +41,7 @@ def test_create_and_poll_scan(mock_schedule_scan, auth_client):
                 # Add a mock finding
                 finding = Finding(
                     scan_id=scan.id,
-                    tenant_id=scan.tenant_id,
+                    user_id=scan.user_id,
                     title="Mock Security Issue",
                     severity="MEDIUM",
                     description="This is a mock finding for testing",
@@ -78,29 +78,4 @@ def test_create_and_poll_scan(mock_schedule_scan, auth_client):
     assert mock_schedule_scan.called
 
 
-@patch("app.services.scanner.schedule_scan")
-def test_create_tenant(mock_schedule_scan, client):
-    """Test creating a tenant."""
-    response = client.post("/api/v1/tenants?name=NewTenant")
-    assert response.status_code == 201
-    data = response.json()
-    assert "tenant_id" in data
-    assert "api_key" in data
 
-
-def test_list_tenants(client):
-    """Test listing all tenants."""
-    # 1. Create a few tenants
-    client.post("/api/v1/tenants?name=Tenant1")
-    client.post("/api/v1/tenants?name=Tenant2")
-    
-    # 2. List them
-    response = client.get("/api/v1/tenants")
-    assert response.status_code == 200
-    data = response.json()
-    
-    # 3. Verify
-    assert isinstance(data, list)
-    names = [t["name"] for t in data]
-    assert "Tenant1" in names
-    assert "Tenant2" in names

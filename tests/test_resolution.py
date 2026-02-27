@@ -2,27 +2,30 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 from uuid import uuid4, UUID
-from app.models import Scan, Finding, Tenant, APIKey
+from app.models import Scan, Finding, User, APIKey
 
 def test_resolve_finding_endpoint(client, session):
-    # Setup: Create a tenant and API key
-    tenant_name = "Test Tenant"
-    response = client.post(f"/api/v1/tenants?name={tenant_name}")
-    assert response.status_code == 201
-    data = response.json()
-    api_key = data["api_key"]
+    # Setup: Create a user and API key
+    email = f"user_{uuid4()}@example.com"
+    response = client.post("/api/v1/auth/register", json={"email": email, "password": "pwd"})
+    assert response.status_code == 200
+    user_id = UUID(response.json()["id"])
+    
+    token_resp = client.post("/api/v1/auth/token", data={"username": email, "password": "pwd"})
+    token = token_resp.json()["access_token"]
+    response = client.post("/api/v1/user/api-key", headers={"Authorization": f"Bearer {token}"})
+    api_key = response.json()["api_key"]
     headers = {"x-api-key": api_key}
 
     # Setup: Create a scan and a finding
-    tenant_id = UUID(data["tenant_id"])
-    scan = Scan(tenant_id=tenant_id, repo_url="https://github.com/test/repo", status="completed")
+    scan = Scan(user_id=user_id, repo_url="https://github.com/test/repo", status="completed")
     session.add(scan)
     session.commit()
     session.refresh(scan)
 
     finding = Finding(
         scan_id=scan.id,
-        tenant_id=tenant_id,
+        user_id=user_id,
         title="Test Vulnerability",
         severity="HIGH",
         description="Test Description",
@@ -56,10 +59,14 @@ def test_resolve_finding_endpoint(client, session):
         assert data["finding_id"] == str(finding.id)
 
 def test_resolve_finding_not_found(client, session):
-    # Setup: Create a tenant and API key
-    tenant_name = "Test Tenant"
-    response = client.post(f"/api/v1/tenants?name={tenant_name}")
-    assert response.status_code == 201
+    # Setup: Create a user and API key
+    email = f"user_{uuid4()}@example.com"
+    response = client.post("/api/v1/auth/register", json={"email": email, "password": "pwd"})
+    assert response.status_code == 200
+    
+    token_resp = client.post("/api/v1/auth/token", data={"username": email, "password": "pwd"})
+    token = token_resp.json()["access_token"]
+    response = client.post("/api/v1/user/api-key", headers={"Authorization": f"Bearer {token}"})
     api_key = response.json()["api_key"]
     headers = {"x-api-key": api_key}
 
@@ -75,19 +82,19 @@ def test_resolution_service_logic(session):
     from app.services.resolution import ResolutionService
     
     # Setup
-    # Create a dummy tenant for context
-    tenant = Tenant(name="Logic Test Tenant")
-    session.add(tenant)
+    # Create a dummy user for context
+    user = User(email=f"user_{uuid4()}@example.com", hashed_password="pwd")
+    session.add(user)
     session.commit()
-    session.refresh(tenant)
+    session.refresh(user)
     
-    scan = Scan(tenant_id=tenant.id, repo_url="https://github.com/test/repo", status="completed")
+    scan = Scan(user_id=user.id, repo_url="https://github.com/test/repo", status="completed")
     session.add(scan)
     session.commit()
     
     finding = Finding(
         scan_id=scan.id,
-        tenant_id=tenant.id,
+        user_id=user.id,
         title="Test Vulnerability",
         severity="HIGH",
         description="Test Description",
@@ -126,15 +133,15 @@ def test_resolution_service_logic(session):
 def test_resolution_service_gitlab(session):
     from app.services.resolution import ResolutionService
     # Setup
-    tenant = Tenant(name="GitLab Test")
-    session.add(tenant)
+    user = User(email=f"user_{uuid4()}@example.com", hashed_password="pwd", gitlab_token="GL-TOKEN")
+    session.add(user)
     session.commit()
-    session.refresh(tenant)
+    session.refresh(user)
     
-    scan = Scan(tenant_id=tenant.id, repo_url="https://gitlab.com/test/group/project", status="completed")
+    scan = Scan(user_id=user.id, repo_url="https://gitlab.com/test/group/project", status="completed")
     session.add(scan)
     session.commit()
-    finding = Finding(scan_id=scan.id, tenant_id=tenant.id, title="Test", severity="HIGH", description="Desc", file_path="main.py")
+    finding = Finding(scan_id=scan.id, user_id=user.id, title="Test", severity="HIGH", description="Desc", file_path="main.py")
     session.add(finding)
     session.commit()
 
@@ -166,15 +173,15 @@ def test_resolution_service_gitlab(session):
 def test_resolution_service_bitbucket(session):
     from app.services.resolution import ResolutionService
     # Setup
-    tenant = Tenant(name="Bitbucket Test")
-    session.add(tenant)
+    user = User(email=f"user_{uuid4()}@example.com", hashed_password="pwd", bitbucket_token="BB-TOKEN")
+    session.add(user)
     session.commit()
-    session.refresh(tenant)
+    session.refresh(user)
     
-    scan = Scan(tenant_id=tenant.id, repo_url="https://bitbucket.org/workspace/repo", status="completed")
+    scan = Scan(user_id=user.id, repo_url="https://bitbucket.org/workspace/repo", status="completed")
     session.add(scan)
     session.commit()
-    finding = Finding(scan_id=scan.id, tenant_id=tenant.id, title="Test", severity="HIGH", description="Desc", file_path="main.py")
+    finding = Finding(scan_id=scan.id, user_id=user.id, title="Test", severity="HIGH", description="Desc", file_path="main.py")
     session.add(finding)
     session.commit()
 
@@ -223,17 +230,17 @@ def test_bundled_resolution_scan(session):
     service = ResolutionService(session)
     
     # Setup
-    tenant = Tenant(name="Bundled Test")
-    session.add(tenant)
+    user = User(email=f"user_{uuid4()}@example.com", hashed_password="pwd")
+    session.add(user)
     session.commit()
-    session.refresh(tenant)
+    session.refresh(user)
     
-    scan = Scan(id=uuid4(), tenant_id=tenant.id, repo_url="https://github.com/test/repo", status="completed")
+    scan = Scan(id=uuid4(), user_id=user.id, repo_url="https://github.com/test/repo", status="completed")
     session.add(scan)
     session.commit()
     
-    f1 = Finding(scan_id=scan.id, tenant_id=tenant.id, title="Vuln 1", file_path="f1.py", description="D1", severity="HIGH")
-    f2 = Finding(scan_id=scan.id, tenant_id=tenant.id, title="Vuln 2", file_path="f2.py", description="D2", severity="LOW")
+    f1 = Finding(scan_id=scan.id, user_id=user.id, title="Vuln 1", file_path="f1.py", description="D1", severity="HIGH")
+    f2 = Finding(scan_id=scan.id, user_id=user.id, title="Vuln 2", file_path="f2.py", description="D2", severity="LOW")
     session.add(f1)
     session.add(f2)
     session.commit()

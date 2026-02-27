@@ -2,13 +2,13 @@ import requests
 from requests.auth import HTTPBasicAuth
 from typing import Optional
 from ..core.config import Settings
-from ..models import Tenant
+from ..models import User
 
 settings = Settings()
 
 class JiraService:
-    def __init__(self, tenant: Optional[Tenant] = None, jira_url: Optional[str] = None):
-        raw_url = jira_url or (tenant.jira_url if tenant else None) or settings.jira_url
+    def __init__(self, user: Optional[User] = None, jira_url: Optional[str] = None):
+        raw_url = jira_url or (user.jira_url if user else None) or settings.jira_url
         if raw_url:
             # Normalize URL: remove path components if mistakenly included
             from urllib.parse import urlparse
@@ -17,9 +17,9 @@ class JiraService:
         else:
             self.jira_url = None
         
-        self.email = (tenant.jira_email if tenant else None) or settings.jira_email
-        self.api_token = (tenant.jira_api_token if tenant else None) or settings.jira_api_token
-        self.project_key = (tenant.jira_project_key if tenant else None) or settings.jira_project_key
+        self.email = (user.jira_email if user else None) or settings.jira_email
+        self.api_token = (user.jira_api_token if user else None) or settings.jira_api_token
+        self.project_key = (user.jira_project_key if user else None) or settings.jira_project_key
 
     def create_issue(self, summary: str, description: str, issue_type: str = "Task") -> Optional[str]:
         """

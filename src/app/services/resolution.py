@@ -11,7 +11,7 @@ from git import Repo
 from sqlmodel import Session, select
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from ..models import Scan, Finding, Tenant
+from ..models import Scan, Finding, User
 from ..core.config import Settings
 from ..schemas import ResolutionResponse
 from ..core import db
@@ -132,22 +132,21 @@ class ResolutionService:
             raw_settings = settings.bitbucket_token
             
         raw_env = os.getenv(f"{platform.upper()}_TOKEN")
-        
-        # 5. Tenant settings (New)
-        raw_tenant = None
-        tenant = self.session.get(Tenant, scan.tenant_id)
-        if tenant:
+        # 5. User settings (New)
+        raw_user = None
+        user = self.session.get(User, scan.user_id)
+        if user:
             if platform == "github":
-                raw_tenant = tenant.github_token
+                raw_user = user.github_token
             elif platform == "gitlab":
-                raw_tenant = tenant.gitlab_token
+                raw_user = user.gitlab_token
             elif platform == "bitbucket":
-                raw_tenant = tenant.bitbucket_token
+                raw_user = user.bitbucket_token
         
         print(f"[{scan.id}] Platform: {platform}")
         print(f"[{scan.id}] 1. Payload: {'Present' if raw_payload else 'None/Empty'} (Len: {len(raw_payload) if raw_payload else 0})")
         print(f"[{scan.id}] 2. DB Scan: {'Present' if raw_db else 'None/Empty'} (Len: {len(raw_db) if raw_db else 0})")
-        print(f"[{scan.id}] 3. Tenant: {'Present' if raw_tenant else 'None/Empty'} (Len: {len(raw_tenant) if raw_tenant else 0})")
+        print(f"[{scan.id}] 3. User: {'Present' if raw_user else 'None/Empty'} (Len: {len(raw_user) if raw_user else 0})")
         print(f"[{scan.id}] 4. Settings ({platform}): {'Present' if raw_settings else 'None/Empty'} (Len: {len(raw_settings) if raw_settings else 0})")
         print(f"[{scan.id}] 5. OS Env ({platform.upper()}_TOKEN): {'Present' if raw_env else 'None/Empty'} (Len: {len(raw_env) if raw_env else 0})")
 
@@ -160,9 +159,9 @@ class ResolutionService:
         elif not token and raw_db and raw_db.strip():
             token = raw_db.strip()
             token_source = "Scan Model (DB)"
-        elif not token and raw_tenant and raw_tenant.strip():
-            token = raw_tenant.strip()
-            token_source = "Tenant Model"
+        elif not token and raw_user and raw_user.strip():
+            token = raw_user.strip()
+            token_source = "User Model"
         elif not token and raw_settings and raw_settings.strip():
             token = raw_settings.strip()
             token_source = f"App Settings ({platform})"
@@ -306,7 +305,7 @@ class ResolutionService:
                 is_bundled=True, 
                 count=resolved_count,
                 base_branch=default_branch,
-                tenant=tenant
+                user=user
             )
             
             if pr_url:
@@ -327,7 +326,7 @@ class ResolutionService:
             if pr_url:
                 try:
                     from .billing import record_usage
-                    record_usage(tenant_id=scan.tenant_id, resolutions=1, session=self.session)
+                    record_usage(user_id=scan.user_id, resolutions=1, session=self.session)
                 except Exception as e:
                     print(f"[{scan.id}] Failed to record resolution usage: {e}")
 
@@ -624,15 +623,15 @@ class ResolutionService:
             return "bitbucket", f"{parts[-2]}/{parts[-1]}"
         return "unknown", None
 
-    def _create_pull_request(self, repo_url: str, branch_name: str, finding: Finding, token: Optional[str], is_bundled: bool = False, count: int = 1, base_branch: str = "main", tenant: Optional[Tenant] = None) -> Optional[str]:
+    def _create_pull_request(self, repo_url: str, branch_name: str, finding: Finding, token: Optional[str], is_bundled: bool = False, count: int = 1, base_branch: str = "main", user: Optional[User] = None) -> Optional[str]:
         """
         Creates a Pull Request / Merge Request on GitHub, GitLab, or Bitbucket.
         """
-        if not tenant:
-             tenant = self.session.get(Tenant, finding.tenant_id)
+        if not user:
+             user = self.session.get(User, finding.user_id)
         
-        slack_service = SlackService(tenant=tenant)
-        jira_service = JiraService(tenant=tenant)
+        slack_service = SlackService(user=user)
+        jira_service = JiraService(user=user)
         if not token:
             print(f"ERROR: No token provided for PR creation. github_token: {token is not None}, scan.git_token: {finding.scan.git_token if finding.scan else 'N/A'}, settings.github_token: {settings.github_token is not None}")
             return None

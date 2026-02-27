@@ -7,7 +7,6 @@ from datetime import datetime, date
 class UserCreate(BaseModel):
     email: str
     password: str
-    tenant_name: str  # Creating a user also creates a tenant for simplicity in this flow
 
 
 class LoginRequest(BaseModel):
@@ -18,15 +17,14 @@ class LoginRequest(BaseModel):
 class UserRead(BaseModel):
     id: UUID
     email: str
-    tenant_id: UUID
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class TenantRead(BaseModel):
+class UserProfileRead(BaseModel):
     id: UUID
-    name: str
+    email: str
     plan: str
     slack_webhook_url: Optional[str] = None
     jira_url: Optional[str] = None
@@ -70,7 +68,7 @@ class FindingRead(BaseModel):
 
 class ScanRead(BaseModel):
     id: UUID
-    tenant_id: UUID
+    user_id: UUID
     repo_url: HttpUrl
     status: str
     created_at: datetime
@@ -101,7 +99,7 @@ class UsageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class TenantUsageResponse(BaseModel):
+class UserUsageResponse(BaseModel):
     usage: List[UsageRead]
     percentage_credit_left: float
     quota_limit: int

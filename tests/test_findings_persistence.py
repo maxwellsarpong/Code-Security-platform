@@ -7,7 +7,7 @@ from uuid import UUID
 def test_findings_persistence_and_api_response(mock_schedule_scan, auth_client):
     """Test that findings are persisted and returned in the API response."""
     
-    def mock_scan_execution(scan_id, tenant_id=None):
+    def mock_scan_execution(scan_id, user_id=None):
         from app.core.db import engine
         from sqlmodel import Session
         from app.models import Scan, Finding
@@ -22,7 +22,7 @@ def test_findings_persistence_and_api_response(mock_schedule_scan, auth_client):
                 # Add a mock finding with full metadata
                 finding = Finding(
                     scan_id=scan.id,
-                    tenant_id=scan.tenant_id,
+                    user_id=scan.user_id,
                     title="Insecure Cryptographic Algorithm",
                     severity="HIGH",
                     description="The application uses MD5 which is insecure.",

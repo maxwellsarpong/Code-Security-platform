@@ -51,12 +51,19 @@ def _incr_memory(key: str, window_seconds: int):
     return bucket[0]
 
 
-def check_rate_limit(user_id: str, route: str = "default", rate: int = 10, quota_per_month: Optional[int] = None):
+def check_rate_limit(
+    user_id: str,
+    route: str = "default",
+    rate: int = 10,
+    quota_per_month: Optional[int] = None,
+    resolve_quota_per_month: Optional[int] = None,
+):
     """Raises HTTPException(429) when rate limit or quota is exceeded.
 
     - user_id: string (use '__anon__' for anonymous)
     - rate: allowed requests per minute
-    - quota_per_month: allowed scans per month (optional)
+    - quota_per_month: allowed scans per month (enforced on route='scans')
+    - resolve_quota_per_month: allowed resolves per month (enforced on route='resolve')
     """
     # rate (per-minute)
     window = 60
@@ -71,10 +78,10 @@ def check_rate_limit(user_id: str, route: str = "default", rate: int = 10, quota
     if val > rate:
         raise HTTPException(status_code=429, detail="rate limit exceeded")
 
-    # monthly quota check (only for scans route)
+    # monthly scan quota check
     if quota_per_month is not None and route == "scans":
         month = _now_month_key()
-        quota_key = f"quota:{user_id}:{month}"
+        quota_key = f"quota:scan:{user_id}:{month}"
         try:
             qv = _incr_redis(quota_key, 60 * 60 * 24 * 31) if Redis is not None else None
         except Exception:
@@ -82,16 +89,32 @@ def check_rate_limit(user_id: str, route: str = "default", rate: int = 10, quota
         if qv is None:
             qv = _incr_memory(quota_key, 60 * 60 * 24 * 31)
         if qv > quota_per_month:
-            raise HTTPException(status_code=403, detail="monthly quota exceeded")
+            raise HTTPException(status_code=403, detail="monthly scan quota exceeded — upgrade your plan to continue scanning")
+
+    # monthly resolve quota check
+    if resolve_quota_per_month is not None and route == "resolve":
+        month = _now_month_key()
+        quota_key = f"quota:resolve:{user_id}:{month}"
+        try:
+            qv = _incr_redis(quota_key, 60 * 60 * 24 * 31) if Redis is not None else None
+        except Exception:
+            qv = None
+        if qv is None:
+            qv = _incr_memory(quota_key, 60 * 60 * 24 * 31)
+        if qv > resolve_quota_per_month:
+            raise HTTPException(status_code=403, detail="monthly resolve quota exceeded — upgrade your plan to continue resolving findings")
 
     return True
 
 
-def reset_monthly_quota(user_id: str):
-    """Resets the monthly quota for a user by deleting the quota key in Redis or memory."""
+def reset_monthly_quota(user_id: str, quota_type: str = "scan"):
+    """Resets the monthly scan or resolve quota for a user.
+
+    quota_type: 'scan' (default) or 'resolve'
+    """
     month = _now_month_key()
-    quota_key = f"quota:{user_id}:{month}"
-    
+    quota_key = f"quota:{quota_type}:{user_id}:{month}"
+
     # Reset in Redis
     try:
         conn = Redis.from_url(REDIS_URL) if Redis is not None else None
@@ -99,9 +122,9 @@ def reset_monthly_quota(user_id: str):
             conn.delete(quota_key)
     except Exception:
         pass
-        
+
     # Reset in Memory
     if quota_key in _memory_counters:
         del _memory_counters[quota_key]
-    
+
     return True

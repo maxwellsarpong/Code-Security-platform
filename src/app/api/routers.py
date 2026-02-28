@@ -4,17 +4,17 @@ from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from uuid import UUID
 from datetime import date
-from ..schemas import ScanCreate, ScanRead, ResolutionRequest, ResolutionResponse, FindingRead, UsageRead, UserUsageResponse, UserProfileRead
+from ..schemas import ScanCreate, ScanRead, ResolutionRequest, ResolutionResponse, FindingRead, UsageRead, UserUsageResponse, UserProfileRead, UserProfileUpdate
 from ..models import Scan, User, APIKey, Usage, Finding
 from ..core.db import get_session
 from ..services.scanner import enqueue_scan, get_scan_result
 from ..services.resolution import ResolutionService
 from ..services.billing import renew_subscription
-from .deps import get_user_from_api_key, get_user_no_quota, get_user_enforce_scan_quota
+from .deps import get_user_from_api_key, get_user_no_quota, get_user_enforce_scan_quota, get_user_enforce_resolve_quota
 import secrets
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
-from . import auth
+from . import auth, admin
 
 def normalize_id(target_id: UUID) -> str:
     """Standardize UUID to non-hyphenated string for SQLite compatibility."""
@@ -22,6 +22,7 @@ def normalize_id(target_id: UUID) -> str:
 
 router = APIRouter()
 router.include_router(auth.router, prefix="/auth", tags=["auth"])
+router.include_router(admin.router, prefix="/admin", tags=["admin"])
 
 
 @router.post("/user/api-key", status_code=201)
@@ -44,6 +45,29 @@ def get_user_profile(user: User = Depends(get_user_from_api_key)):
     return user
 
 
+@router.put("/user/profile", response_model=UserProfileRead)
+def update_user_profile(
+    payload: UserProfileUpdate,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_user_from_api_key)
+):
+    """
+    Update the authenticated user's integration settings (Slack, Jira, Git tokens).
+    Protected fields like 'plan', 'is_superuser' and 'quotas' are strictly inaccessible here.
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    update_data = payload.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(user, key, value)
+        
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
 @router.get('/user/usage', response_model=UserUsageResponse)
 def get_user_usage(session: Session = Depends(get_session), user: User = Depends(get_user_from_api_key)):
     if not user:
@@ -59,16 +83,22 @@ def get_user_usage(session: Session = Depends(get_session), user: User = Depends
     
     monthly_stmt = select(Usage).where(Usage.user_id == user.id, Usage.date >= first_of_month)
     monthly_rows = session.exec(monthly_stmt).all()
-    
-    month_usage = sum((r.scans_count or 0) + (r.resolutions_count or 0) for r in monthly_rows)
-    quota = user.quota_per_month or 100 # default fallback
-    
-    percentage_left = max(0.0, ((quota - month_usage) / quota) * 100)
-    
+
+    month_scans = sum(r.scans_count or 0 for r in monthly_rows)
+    month_resolves = sum(r.resolutions_count or 0 for r in monthly_rows)
+    month_usage = month_scans + month_resolves
+
+    scan_quota = user.scan_quota_per_month if user.scan_quota_per_month is not None else 2
+    resolve_quota = user.resolve_quota_per_month if user.resolve_quota_per_month is not None else 2
+    combined_quota = scan_quota + resolve_quota
+
+    percentage_left = max(0.0, ((combined_quota - month_usage) / combined_quota) * 100) if combined_quota > 0 else 0.0
+
     return {
         "usage": rows,
         "percentage_credit_left": round(percentage_left, 2),
-        "quota_limit": quota,
+        "scan_quota_limit": scan_quota,
+        "resolve_quota_limit": resolve_quota,
         "current_month_usage": month_usage
     }
 
@@ -119,11 +149,11 @@ def read_scan(scan_id: UUID, session: Session = Depends(get_session), user: User
 
 @router.post("/findings/{target_id}/resolve", response_model=ResolutionResponse)
 def resolve_finding(
-    target_id: UUID, 
+    target_id: UUID,
     payload: Optional[ResolutionRequest] = None,
     force_sync: bool = False,
     session: Session = Depends(get_session),
-    user: User = Depends(get_user_enforce_scan_quota)
+    user: User = Depends(get_user_enforce_resolve_quota)
 ):
     """
     Resolve vulnerabilities. Accepts either a Finding ID (to fix one) or a Scan ID (to fix all).
@@ -202,7 +232,7 @@ def renew_monthly_quota_subscription(
         
     renew_subscription(user.id, amount, session)
     session.commit()
-    
+
     return {"status": "success", "message": f"Monthly quota renewed for user {user.email}"}
 
 

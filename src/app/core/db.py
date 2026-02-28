@@ -44,15 +44,22 @@ def init_db():
         # 3. Update 'user' table
         user_cols = [col['name'] for col in inspector.get_columns('user')]
         new_user_cols = [
-            'plan', 'rate_limit_per_minute', 'quota_per_month',
-            'slack_webhook_url', 'jira_url', 'jira_email', 'jira_api_token', 
-            'jira_project_key', 'github_token', 'gitlab_token', 'bitbucket_token'
+            'plan', 'rate_limit_per_minute', 'scan_quota_per_month', 'resolve_quota_per_month',
+            'slack_webhook_url', 'jira_url', 'jira_email', 'jira_api_token',
+            'jira_project_key', 'github_token', 'gitlab_token', 'bitbucket_token', 'is_superuser'
         ]
         for col in new_user_cols:
             if col not in user_cols:
-                # Basic typing fallback for sqlite migrations
-                col_type = "INTEGER" if 'limit' in col or 'quota' in col else "VARCHAR"
-                
+                # Choose the right type and default per column
+                if col in ('scan_quota_per_month', 'resolve_quota_per_month'):
+                    col_type = "INTEGER DEFAULT 2"
+                elif col == 'rate_limit_per_minute':
+                    col_type = "INTEGER DEFAULT 10"
+                elif col == 'is_superuser':
+                    col_type = "BOOLEAN DEFAULT FALSE"
+                else:
+                    col_type = "VARCHAR"
+
                 print(f"Migration: Adding column '{col}' to table 'user'...")
                 conn.execute(text(f"ALTER TABLE user ADD COLUMN {col} {col_type}"))
                 conn.commit()

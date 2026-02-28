@@ -17,3 +17,8 @@ test_billing_debug.txt
 verify_fix.py
 verify_billing.py
 dump_schema.py
+verify_admin.py
+verify_init.py
+verify_quota.py
+verify_resolve.py
+verify_update.py

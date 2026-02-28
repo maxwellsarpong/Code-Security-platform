@@ -54,7 +54,7 @@ def test_billing_recorded_after_scan(mock_schedule_scan, client):
     with Session(engine) as session:
         user = session.exec(select(User).where(User.email == "billing-test@example.com")).first()
         user.rate_limit_per_minute = 10
-        user.quota_per_month = 100
+        user.scan_quota_per_month = 100
         session.add(user)
         session.commit()
         

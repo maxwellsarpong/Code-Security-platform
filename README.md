@@ -93,6 +93,24 @@ curl http://localhost:8000/api/v1/scans \
 
 ---
 
+### Plans & Quotas
+
+Every user is assigned a plan that controls their monthly scan and resolution limits.
+
+| Plan | Monthly Scans | Monthly Resolves |
+|---|---|---|
+| `free` | 2 | 2 |
+| `team` | 500 | 500 |
+| `enterprise` | 2000 | 2000 |
+
+- New users are automatically placed on the **Free** plan.
+- Check your current plan and quotas at `GET /api/v1/user/profile`.
+- Check current-month usage at `GET /api/v1/user/usage`.
+- When a quota is exceeded the API returns `403` with a descriptive message indicating which quota was hit and that an upgrade is required.
+- Renew / reset your monthly quotas with `POST /api/v1/user/subscription/renew`.
+
+---
+
 ### API Reference
 
 All protected endpoints accept either `Authorization: Bearer <JWT_TOKEN>` or `x-api-key: <API_KEY>`.
@@ -102,6 +120,7 @@ All protected endpoints accept either `Authorization: Bearer <JWT_TOKEN>` or `x-
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/api/v1/auth/register` | Register a new user account |
+| `POST` | `/api/v1/auth/init-superuser` | Bootstraps the system by creating the first superuser. Returns `403` if a superuser already exists. |
 | `POST` | `/api/v1/auth/login` | JSON login — returns a JWT. Returns `404` if the email is not found, `401` for a wrong password |
 | `POST` | `/api/v1/auth/token` | OAuth2 form-data login — returns a JWT |
 
@@ -110,6 +129,11 @@ All protected endpoints accept either `Authorization: Bearer <JWT_TOKEN>` or `x-
 curl -X POST http://localhost:8000/api/v1/auth/register \
      -H "Content-Type: application/json" \
      -d '{ "email": "user@example.com", "password": "yourpassword" }'
+
+# Create Initial Superuser (Run only once to bootstrap)
+curl -X POST http://localhost:8000/api/v1/auth/init-superuser \
+     -H "Content-Type: application/json" \
+     -d '{ "email": "admin@example.com", "password": "secureadminpassword" }'
 
 # Login (JSON)
 curl -X POST http://localhost:8000/api/v1/auth/login \
@@ -125,11 +149,18 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 | Method | Endpoint | Auth Required | Description |
 |--------|----------|---------------|-------------|
 | `GET` | `/api/v1/user/profile` | ✅ | Get profile and quota info for the authenticated user |
+| `PUT` | `/api/v1/user/profile` | ✅ | Update optional attributes (like `slack_webhook_url` or `github_token`) |
 | `GET` | `/api/v1/user/usage` | ✅ | Get usage history and current-month credit summary |
 | `POST` | `/api/v1/user/api-key` | ✅ | Generate a new API key for the authenticated user |
 | `POST` | `/api/v1/user/subscription/renew` | ✅ | Renew monthly quota (optionally pass `?amount=100.0`) |
 
 ```bash
+# Update user profile
+curl -X PUT http://localhost:8000/api/v1/user/profile \
+     -H "Authorization: Bearer <JWT_TOKEN>" \
+     -H "Content-Type: application/json" \
+     -d '{ "slack_webhook_url": "https://hooks.slack.com/services/...", "github_token": "ghp_..." }'
+
 # Get usage
 curl http://localhost:8000/api/v1/user/usage \
      -H "Authorization: Bearer <JWT_TOKEN>"
@@ -140,6 +171,28 @@ curl -X POST "http://localhost:8000/api/v1/user/subscription/renew?amount=100.0"
 ```
 
 ---
+
+#### Admin
+
+| Method | Endpoint | Auth Required | Description |
+|--------|----------|---------------|-------------|
+| `GET` | `/api/v1/admin/users` | ✅ (superuser) | List all registered users |
+| `PUT` | `/api/v1/admin/users/{user_id}` | ✅ (superuser) | Update a user's plan, quota, or `is_superuser` status |
+
+```bash
+# List users
+curl http://localhost:8000/api/v1/admin/users \
+     -H "Authorization: Bearer <SUPERUSER_JWT>"
+
+# Promote user to enterprise
+curl -X PUT http://localhost:8000/api/v1/admin/users/<USER_ID> \
+     -H "Authorization: Bearer <SUPERUSER_JWT>" \
+     -H "Content-Type: application/json" \
+     -d '{ "plan": "enterprise" }'
+```
+
+---
+
 
 #### Scans
 

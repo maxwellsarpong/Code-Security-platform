@@ -56,37 +56,74 @@ def get_user_no_quota(
     return get_user_from_api_key(x_api_key, session, current_user)
 
 
+def get_current_superuser(
+    user: Optional[User] = Depends(get_user_no_quota)
+) -> User:
+    """Dependency that ensures the authenticated user is a superuser."""
+    if not user:
+         raise HTTPException(status_code=401, detail="Authentication required")
+    if not user.is_superuser:
+         raise HTTPException(status_code=403, detail="Superuser required")
+    return user
+
+
 def get_user_enforce_scan_quota(
     x_api_key: Optional[str] = Header(None),
     session: Session = Depends(get_session),
     current_user: Optional[User] = Depends(get_current_user)
 ) -> Optional[User]:
     """Auth + Rate limit + Monthly Scan Quota enforcement."""
-    return get_user_enforce_quota(x_api_key, session, current_user, enforce_quota=True)
+    return get_user_enforce_quota(x_api_key, session, current_user, enforce_quota="scan")
+
+
+def get_user_enforce_resolve_quota(
+    x_api_key: Optional[str] = Header(None),
+    session: Session = Depends(get_session),
+    current_user: Optional[User] = Depends(get_current_user)
+) -> Optional[User]:
+    """Auth + Rate limit + Monthly Resolve Quota enforcement."""
+    return get_user_enforce_quota(x_api_key, session, current_user, enforce_quota="resolve")
 
 
 def get_user_enforce_quota(
     x_api_key: Optional[str] = Header(None),
     session: Session = Depends(get_session),
     current_user: Optional[User] = Depends(get_current_user),
-    enforce_quota: bool = True
+    enforce_quota: str | bool = False  # 'scan', 'resolve', or False
 ) -> Optional[User]:
-    """Resolve API key OR logged-in User to User and enforce rate limits.
-    """
-    # 1. Use logged in user context (JWT)
-    if current_user:
-        # Differentiate rate limit buckets: 'scans' for writes (quota-sensitive) vs 'api' for reads
-        route_name = "scans" if enforce_quota else "api"
-        # Give more headroom for read-only operations (default 5x)
-        effective_rate = current_user.rate_limit_per_minute if enforce_quota else current_user.rate_limit_per_minute * 5
-        q = current_user.quota_per_month if enforce_quota else None
+    """Resolve API key OR logged-in User to User and enforce rate limits."""
+    # Normalise legacy bool callers
+    if enforce_quota is True:
+        enforce_quota = "scan"
+    elif enforce_quota is False:
+        enforce_quota = ""
+
+    def _check(user: User):
+        route = enforce_quota if enforce_quota in ("scans", "resolve") else (
+            "scans" if enforce_quota == "scan" else ("resolve" if enforce_quota == "resolve" else "api")
+        )
+        is_scan = enforce_quota == "scan"
+        is_resolve = enforce_quota == "resolve"
+        effective_rate = user.rate_limit_per_minute if (is_scan or is_resolve) else user.rate_limit_per_minute * 5
         
-        check_rate_limit(user_id=str(current_user.id), route=route_name, rate=effective_rate, quota_per_month=q)
+        scan_quota = user.scan_quota_per_month if user.scan_quota_per_month is not None else 2
+        resolve_quota = user.resolve_quota_per_month if user.resolve_quota_per_month is not None else 2
+
+        check_rate_limit(
+            user_id=str(user.id),
+            route=route,
+            rate=effective_rate,
+            quota_per_month=scan_quota if is_scan else None,
+            resolve_quota_per_month=resolve_quota if is_resolve else None,
+        )
+
+    # 1. Use logged-in user context (JWT)
+    if current_user:
+        _check(current_user)
         return current_user
 
     # 2. Fallback to API Key
     if not x_api_key:
-        # anonymous requests counted under special 'anonymous' user id
         check_rate_limit(user_id="__anon__", route="global")
         return None
 
@@ -94,15 +131,10 @@ def get_user_enforce_quota(
     row = session.exec(statement).one_or_none()
     if not row:
         raise HTTPException(status_code=401, detail="invalid api key")
-    
+
     user = session.get(User, row.user_id)
     if not user:
         raise HTTPException(status_code=401, detail="user not found")
 
-    # enforce per-user rate limit and quota
-    route_name = "scans" if enforce_quota else "api"
-    effective_rate = user.rate_limit_per_minute if enforce_quota else user.rate_limit_per_minute * 5
-    q = user.quota_per_month if enforce_quota else None
-    
-    check_rate_limit(user_id=str(user.id), route=route_name, rate=effective_rate, quota_per_month=q)
+    _check(user)
     return user

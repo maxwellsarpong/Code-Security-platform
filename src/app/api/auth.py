@@ -3,6 +3,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from ..core.db import get_session
 from ..core.auth import get_password_hash, verify_password, create_access_token
+from ..core.billing_plans import get_plan
 from ..models import User
 from ..schemas import UserCreate, UserRead, Token, LoginRequest
 
@@ -22,10 +23,53 @@ def register(user_in: UserCreate, session: Session = Depends(get_session)):
     
     
     # Create User
+    plan_config = get_plan("free")
     hashed_password = get_password_hash(user_in.password)
     user = User(
         email=user_in.email,
-        hashed_password=hashed_password
+        hashed_password=hashed_password,
+        plan="free",
+        scan_quota_per_month=plan_config["scan_quota"],
+        resolve_quota_per_month=plan_config["resolve_quota"],
+    )
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return user
+
+
+@router.post("/init-superuser", response_model=UserRead)
+def init_superuser(user_in: UserCreate, session: Session = Depends(get_session)):
+    """
+    Initializes a superuser account if no superuser currently exists.
+    Returns 403 Forbidden if a superuser already exists in the system.
+    """
+    # Check if ANY superuser exists
+    superusers = session.exec(select(User).where(User.is_superuser == True)).all()
+    if superusers:
+        raise HTTPException(
+            status_code=403,
+            detail="A superuser already exists. Subsequent superusers must be promoted by an existing admin.",
+        )
+        
+    # Check if requested email is already in use
+    existing_user = session.exec(select(User).where(User.email == user_in.email)).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=400,
+            detail="User with this email already exists",
+        )
+        
+    # Create Superuser
+    plan_config = get_plan("enterprise")
+    hashed_password = get_password_hash(user_in.password)
+    user = User(
+        email=user_in.email,
+        hashed_password=hashed_password,
+        plan="enterprise",
+        is_superuser=True,
+        scan_quota_per_month=plan_config["scan_quota"],
+        resolve_quota_per_month=plan_config["resolve_quota"],
     )
     session.add(user)
     session.commit()

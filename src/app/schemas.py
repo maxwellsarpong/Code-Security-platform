@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl, ConfigDict
+from pydantic import BaseModel, HttpUrl, ConfigDict, field_validator
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime, date
@@ -26,11 +26,38 @@ class UserProfileRead(BaseModel):
     id: UUID
     email: str
     plan: str
+    scan_quota_per_month: int = 2
+    resolve_quota_per_month: int = 2
     slack_webhook_url: Optional[str] = None
     jira_url: Optional[str] = None
+    is_superuser: bool = False
     created_at: datetime
 
+    @field_validator('scan_quota_per_month', 'resolve_quota_per_month', mode='before')
+    @classmethod
+    def default_quota_if_null(cls, v):
+        """Backfill NULL DB values (from pre-migration rows) with the Free plan default."""
+        return v if v is not None else 2
+
     model_config = ConfigDict(from_attributes=True)
+
+
+class UserProfileUpdate(BaseModel):
+    slack_webhook_url: Optional[str] = None
+    jira_url: Optional[str] = None
+    jira_email: Optional[str] = None
+    jira_api_token: Optional[str] = None
+    jira_project_key: Optional[str] = None
+    github_token: Optional[str] = None
+    gitlab_token: Optional[str] = None
+    bitbucket_token: Optional[str] = None
+
+
+class AdminUserUpdate(BaseModel):
+    plan: Optional[str] = None
+    is_superuser: Optional[bool] = None
+    scan_quota_per_month: Optional[int] = None
+    resolve_quota_per_month: Optional[int] = None
 
 
 class Token(BaseModel):
@@ -102,5 +129,6 @@ class UsageRead(BaseModel):
 class UserUsageResponse(BaseModel):
     usage: List[UsageRead]
     percentage_credit_left: float
-    quota_limit: int
+    scan_quota_limit: int
+    resolve_quota_limit: int
     current_month_usage: int

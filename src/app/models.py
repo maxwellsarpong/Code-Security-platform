@@ -9,11 +9,13 @@ class User(SQLModel, table=True):
     email: str = Field(unique=True, index=True)
     hashed_password: str
     is_active: bool = True
+    is_superuser: bool = Field(default=False)
     
     # Quota and Plan
     plan: str = "free"
     rate_limit_per_minute: int = 10
-    quota_per_month: int = 100
+    scan_quota_per_month: Optional[int] = 2
+    resolve_quota_per_month: Optional[int] = 2
     
     # Integration Config
     slack_webhook_url: Optional[str] = None

@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     jira_email: Optional[str] = None
     jira_api_token: Optional[str] = None
     jira_project_key: Optional[str] = None
+    
+    # GenAI configuration
+    gemini_api_key: Optional[str] = None
 
     model_config = {
         "env_file": ".env",

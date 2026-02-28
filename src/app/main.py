@@ -17,7 +17,17 @@ SENTRY_DSN = os.getenv("SENTRY_DSN", "")
 if SENTRY_DSN:
     sentry_sdk.init(dsn=SENTRY_DSN, traces_sample_rate=0.1)
 
-app = FastAPI(title="security-compliance-platform - scanner API")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+app = FastAPI(
+    title="security-compliance-platform - scanner API",
+    lifespan=lifespan
+)
 
 # Configure CORS
 app.add_middleware(
@@ -29,11 +39,6 @@ app.add_middleware(
 )
 
 app.include_router(router, prefix="/api/v1")
-
-
-@app.on_event("startup")
-def on_startup():
-    init_db()
 
 
 @app.get("/health")

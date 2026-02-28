@@ -218,7 +218,9 @@ class ResolutionService:
             # Use ThreadPoolExecutor to generate fixes in parallel across different files
             def process_file_findings(file_path, findings_list):
                 results = []
-                current_file_path = repo_path / file_path
+                # Ensure we strip leading slash to avoid pathlib / join issues
+                clean_path = file_path.lstrip("/")
+                current_file_path = repo_path / clean_path
                 if not current_file_path.exists():
                     return results
 
@@ -252,15 +254,43 @@ class ResolutionService:
                     try:
                         file_results = future.result()
                         if file_results:
-                            repo.index.add([file_path])
+                            # Use lstrip to ensure GitPython doesn't see an absolute path
+                            repo.index.add([file_path.lstrip("/")])
                             applied_findings.extend(file_results)
                             resolved_count += len(file_results)
                     except Exception as e:
                         print(f"[{scan.id}] ERROR: Failed to process fixes for {file_path}: {e}")
 
             if resolved_count == 0:
-                print(f"[{scan.id}] STATUS: FAILED - Could not generate fixes for any of the {len(findings)} findings in this scan.")
-                return ResolutionResponse(status="failed", finding_id=scan.id, message="Could not generate fixes for any findings in this scan.")
+                print(f"[{scan.id}] STATUS: FAILED - Initial resolution pass yielded zero fixes. Triggering batch-level AI fallback.")
+                
+                # Batch-level fallback: Iterate through findings one more time with AI
+                for f in findings:
+                    clean_path = f.file_path.lstrip("/")
+                    file_path = repo_path / clean_path
+                    if not file_path.exists():
+                        continue
+                        
+                    with open(file_path, "r") as f_handle:
+                        content = f_handle.read()
+                    
+                    # We call _generate_fix with force_ai=True (we'll update that method next)
+                    # or simply call a specialized batch AI method if we want to be more direct.
+                    new_content = self._generate_fix(f, repo_path, content=content, force_ai=True)
+                    
+                    if new_content and new_content != content:
+                        with open(file_path, "w") as f_handle:
+                            f_handle.write(new_content)
+                        # Normalize path for Git staging
+                        repo.index.add([clean_path])
+                        applied_findings.append(f)
+                        resolved_count += 1
+                
+                if resolved_count == 0:
+                    print(f"[{scan.id}] STATUS: FAILED - Batch-level AI fallback also failed to generate any fixes.")
+                    return ResolutionResponse(status="failed", finding_id=scan.id, message="Could not generate fixes for any findings in this scan (even with AI fallback).")
+                else:
+                    print(f"[{scan.id}] STATUS: IN_PROGRESS - Batch-level AI successfully resolved {resolved_count} findings.")
 
             print(f"[{scan.id}] STATUS: IN_PROGRESS - Resolved {resolved_count} findings. Preparing to commit and push.")
 
@@ -358,183 +388,230 @@ class ResolutionService:
         # Re-use the bundled logic for single finding for consistency
         return self._resolve_multiple_findings(scan, [finding], github_token)
 
-    def _generate_fix(self, finding: Finding, repo_path: Path, content: Optional[str] = None) -> Optional[str]:
+    def _generate_fix(self, finding: Finding, repo_path: Path, content: Optional[str] = None, force_ai: bool = False) -> Optional[str]:
         """
         Deterministic, rule-based Fix Generation logic.
         """
         if content is None:
-            file_path = repo_path / finding.file_path
+            clean_path = finding.file_path.lstrip("/")
+            file_path = repo_path / clean_path
             if not file_path.exists():
                 return None
             with open(file_path, "r") as f:
                 content = f.read()
 
-        # 1. Handle dependency updates (e.g., from pip-audit)
-        if (finding.title and "Vulnerable dependency:" in finding.title) or (finding.description and "Vulnerable dependency" in finding.description):
-            return self._fix_dependency(content, finding)
+        # Step 1: Deterministic rules (if not forcing AI)
+        if not force_ai:
+            # 1. Handle dependency updates (e.g., from pip-audit)
+            if (finding.title and "Vulnerable dependency:" in finding.title) or (finding.description and "Vulnerable dependency" in finding.description):
+                return self._fix_dependency(content, finding)
 
-        # 2. Handle common pattern replacements
-        # Example: Binding to 0.0.0.0
-        if "0.0.0.0" in content and ((finding.title and "bind" in finding.title.lower()) or (finding.description and "address" in finding.description.lower())):
-            fixed_content = content.replace("0.0.0.0", "127.0.0.1")
-            if fixed_content != content:
-                print(f"[{finding.id}] Applying rule-based fix: Switched 0.0.0.0 to 127.0.0.1")
-                return fixed_content
+            # 2. Handle common pattern replacements
+            # Example: Binding to 0.0.0.0
+            if "0.0.0.0" in content and ((finding.title and "bind" in finding.title.lower()) or (finding.description and "address" in finding.description.lower())):
+                fixed_content = content.replace("0.0.0.0", "127.0.0.1")
+                if fixed_content != content:
+                    print(f"[{finding.id}] Applying rule-based fix: Switched 0.0.0.0 to 127.0.0.1")
+                    return fixed_content
 
-        # 3. Handle 'assert used' (common in Bandit) - We generally don't fix this automatically as it's often intended
-        if finding.title and "assert_used" in finding.title and "assert " in content:
-            pass
+            # 3. Handle 'assert used' (common in Bandit) - We generally don't fix this automatically as it's often intended
+            if finding.title and "assert_used" in finding.title and "assert " in content:
+                pass
 
-        # 4. Handle Django missing CSRF token
-        if (finding.title and "Django No Csrf Token" in finding.title) or (finding.description and "Django No Csrf Token" in finding.description):
-            if "<form" in content.lower():
-                if "{% csrf_token %}" not in content:
+            # 4. Handle Django missing CSRF token
+            if (finding.title and "Django No Csrf Token" in finding.title) or (finding.description and "Django No Csrf Token" in finding.description):
+                if "<form" in content.lower():
+                    if "{% csrf_token %}" not in content:
+                        import re
+                        # Add {% csrf_token %} after the opening <form> tag, handle variations
+                        # Using a more robust regex that ignores case and handles potential attributes
+                        fixed_content = re.sub(r'(<form[^>]*>)', r'\1\n    {% csrf_token %}', content, flags=re.IGNORECASE)
+                        if fixed_content != content:
+                            print(f"[{finding.id}] Applying rule-based fix: Added CSRF token to Django form")
+                            return fixed_content
+
+            # 5. Handle hardcoded password strings (Bandit B105) or Django Secret Key
+            if finding.title and any(kw in finding.title.lower() for kw in ["hardcoded_password", "secret_key"]):
+                 import re
+                 # Look for assignment like password = "..." or SECRET_KEY = '...'
+                 # Improved pattern to catch both password-like and SECRET_KEY variables
+                 pattern = r'([a-zA-Z0-9_]*(?:password|secret_key|api_key|token)[a-zA-Z0-9_]*\s*=\s*)(["\'])(?:(?!\2).)+\2'
+                 replacement = r"\1os.environ.get('SECRET_OR_PASSWORD', 'REPLACE_ME')"
+                 fixed_content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
+                 if fixed_content != content:
+                     if "import os" not in fixed_content:
+                         fixed_content = "import os\n" + fixed_content
+                     print(f"[{finding.id}] Applying rule-based fix: Replaced hardcoded secret with os.environ.get")
+                     return fixed_content
+
+            # 6. Handle unsafe JS Document methods (e.g. document.write)
+            if (finding.title and "Insecure Document Method" in finding.title) or (finding.description and "document.write" in finding.description.lower()):
+                if "document.write(" in content or "document.writeln(" in content:
                     import re
-                    # Add {% csrf_token %} after the opening <form> tag, handle variations
-                    # Using a more robust regex that ignores case and handles potential attributes
-                    fixed_content = re.sub(r'(<form[^>]*>)', r'\1\n    {% csrf_token %}', content, flags=re.IGNORECASE)
+                    fixed_content = re.sub(r'document\.write(ln)?\(', r'// [FIXED] replaced insecure write\n    console.log(', content)
                     if fixed_content != content:
-                        print(f"[{finding.id}] Applying rule-based fix: Added CSRF token to Django form")
+                        print(f"[{finding.id}] Applying rule-based fix: Replaced insecure document.write")
                         return fixed_content
 
-        # 5. Handle hardcoded password strings (Bandit B105) or Django Secret Key
-        if finding.title and any(kw in finding.title.lower() for kw in ["hardcoded_password", "secret_key"]):
-             import re
-             # Look for assignment like password = "..." or SECRET_KEY = '...'
-             # Improved pattern to catch both password-like and SECRET_KEY variables
-             pattern = r'([a-zA-Z0-9_]*(?:password|secret_key|api_key|token)[a-zA-Z0-9_]*\s*=\s*)(["\'])(?:(?!\2).)+\2'
-             replacement = r"\1os.environ.get('SECRET_OR_PASSWORD', 'REPLACE_ME')"
-             fixed_content = re.sub(pattern, replacement, content, flags=re.IGNORECASE)
-             if fixed_content != content:
-                 if "import os" not in fixed_content:
-                     fixed_content = "import os\n" + fixed_content
-                 print(f"[{finding.id}] Applying rule-based fix: Replaced hardcoded secret with os.environ.get")
-                 return fixed_content
+            # 9. Handle Sha224 Hash (Bandit B303)
+            if (finding.title and "Sha224 Hash" in finding.title) or (finding.description and "hashlib.sha224" in finding.description.lower()):
+                if "hashlib.sha224(" in content:
+                    fixed_content = content.replace("hashlib.sha224(", "hashlib.sha256(")
+                    if fixed_content != content:
+                        print(f"[{finding.id}] Applying rule-based fix: Switched SHA224 to SHA256")
+                        return fixed_content
 
-        # 6. Handle unsafe JS Document methods (e.g. document.write)
-        if (finding.title and "Insecure Document Method" in finding.title) or (finding.description and "document.write" in finding.description.lower()):
-            if "document.write(" in content or "document.writeln(" in content:
-                import re
-                fixed_content = re.sub(r'document\.write(ln)?\(', r'// [FIXED] replaced insecure write\n    console.log(', content)
+            # 10. Handle Weak SSL Version (Bandit B323)
+            if (finding.title and "Weak Ssl Version" in finding.title) or (finding.description and "ssl.PROTOCOL_TLS" in finding.description.lower()):
+                weak_versions = ["ssl.PROTOCOL_TLSv1", "ssl.PROTOCOL_TLSv1_1", "ssl.PROTOCOL_SSLv2", "ssl.PROTOCOL_SSLv3", "ssl.PROTOCOL_SSLv23"]
+                fixed_content = content
+                for ver in weak_versions:
+                    if ver in fixed_content:
+                        fixed_content = fixed_content.replace(ver, "ssl.PROTOCOL_TLS_CLIENT")
                 if fixed_content != content:
-                    print(f"[{finding.id}] Applying rule-based fix: Replaced insecure document.write")
+                    print(f"[{finding.id}] Applying rule-based fix: Upgraded weak SSL/TLS version to PROTOCOL_TLS_CLIENT")
                     return fixed_content
 
-        # 9. Handle Sha224 Hash (Bandit B303)
-        if (finding.title and "Sha224 Hash" in finding.title) or (finding.description and "hashlib.sha224" in finding.description.lower()):
-            if "hashlib.sha224(" in content:
-                fixed_content = content.replace("hashlib.sha224(", "hashlib.sha256(")
-                if fixed_content != content:
-                    print(f"[{finding.id}] Applying rule-based fix: Switched SHA224 to SHA256")
-                    return fixed_content
+            # 11. Handle Request Session With Http
+            if (finding.title and "Request Session With Http" in finding.title) or (finding.description and "session with http://" in finding.description.lower()):
+                if "http://" in content:
+                    fixed_content = content.replace("http://", "https://")
+                    if fixed_content != content:
+                        print(f"[{finding.id}] Applying rule-based fix: Switched http:// to https://")
+                        return fixed_content
 
-        # 10. Handle Weak SSL Version (Bandit B323)
-        if (finding.title and "Weak Ssl Version" in finding.title) or (finding.description and "ssl.PROTOCOL_TLS" in finding.description.lower()):
-            weak_versions = ["ssl.PROTOCOL_TLSv1", "ssl.PROTOCOL_TLSv1_1", "ssl.PROTOCOL_SSLv2", "ssl.PROTOCOL_SSLv3", "ssl.PROTOCOL_SSLv23"]
-            fixed_content = content
-            for ver in weak_versions:
-                if ver in fixed_content:
-                    fixed_content = fixed_content.replace(ver, "ssl.PROTOCOL_TLS_CLIENT")
-            if fixed_content != content:
-                print(f"[{finding.id}] Applying rule-based fix: Upgraded weak SSL/TLS version to PROTOCOL_TLS_CLIENT")
-                return fixed_content
+            # 12. Prototype Pollution Mitigation (Basic Comment)
+            if (finding.title and "Prototype Pollution" in finding.title) or (finding.description and "Prototype Pollution" in finding.description):
+                if "obj[" in content and "attr]" in content: # Generic pollution pattern
+                     fixed_content = content.replace("obj[attr]", "if(attr !== '__proto__' && attr !== 'constructor') obj[attr]")
+                     if fixed_content != content:
+                         print(f"[{finding.id}] Applying rule-based fix: Added basic prototype pollution check")
+                         return fixed_content
 
-        # 11. Handle Request Session With Http
-        if (finding.title and "Request Session With Http" in finding.title) or (finding.description and "session with http://" in finding.description.lower()):
-            if "http://" in content:
-                fixed_content = content.replace("http://", "https://")
-                if fixed_content != content:
-                    print(f"[{finding.id}] Applying rule-based fix: Switched http:// to https://")
-                    return fixed_content
+            # 13. Handle Non Literal Import
+            if (finding.title and "Non Literal Import" in finding.title) or (finding.description and "importlib.import_module" in finding.description.lower()):
+                 if "import_module(" in content:
+                     import re
+                     # Add a safety comment before the line containing import_module
+                     fixed_content = re.sub(r'(^.*import_module\(.*$)', r'# [SECURITY] Ensure input is validated\n\1', content, flags=re.MULTILINE)
+                     if fixed_content != content:
+                         print(f"[{finding.id}] Applying rule-based fix: Added warning for non-literal import")
+                         return fixed_content
 
-        # 12. Prototype Pollution Mitigation (Basic Comment)
-        if (finding.title and "Prototype Pollution" in finding.title) or (finding.description and "Prototype Pollution" in finding.description):
-            if "obj[" in content and "attr]" in content: # Generic pollution pattern
-                 fixed_content = content.replace("obj[attr]", "if(attr !== '__proto__' && attr !== 'constructor') obj[attr]")
-                 if fixed_content != content:
-                     print(f"[{finding.id}] Applying rule-based fix: Added basic prototype pollution check")
-                     return fixed_content
+            # 14. Handle Django Custom Expression As Sql / Extends Custom Expression
+            if (finding.title and "Custom Expression" in finding.title) or (finding.description and "as_sql" in finding.description.lower()):
+                if "as_sql(" in content and "params" not in content:
+                    import re
+                    # Very basic attempt to suggest parameterization
+                    fixed_content = re.sub(r'def as_sql\(self, compiler, connection\):', 
+                                          'def as_sql(self, compiler, connection, **extra_context):', content)
+                    if fixed_content != content:
+                        print(f"[{finding.id}] Applying rule-based fix: Suggested parameterization for Custom Expression")
+                        return fixed_content
 
-        # 13. Handle Non Literal Import
-        if (finding.title and "Non Literal Import" in finding.title) or (finding.description and "importlib.import_module" in finding.description.lower()):
-             if "import_module(" in content:
-                 import re
-                 # Add a safety comment before the line containing import_module
-                 fixed_content = re.sub(r'(^.*import_module\(.*$)', r'# [SECURITY] Ensure input is validated\n\1', content, flags=re.MULTILINE)
-                 if fixed_content != content:
-                     print(f"[{finding.id}] Applying rule-based fix: Added warning for non-literal import")
-                     return fixed_content
+            # 15. Handle try_except_pass (Bandit B110)
+            if (finding.title and "try_except_pass" in finding.title) or (finding.description and "except: pass" in finding.description.lower()):
+                 if "except:" in content and "pass" in content:
+                     import re
+                     # Replace empty pass with a safety comment or logging
+                     fixed_content = re.sub(r'(except.*:)\s*\n\s+pass', r'\1 # [SECURITY] Do not suppress all errors\n            import logging; logging.error("Exception suppressed")', content)
+                     if fixed_content != content:
+                         print(f"[{finding.id}] Applying rule-based fix: Replaced pass with logging in except block")
+                         return fixed_content
 
-        # 14. Handle Django Custom Expression As Sql / Extends Custom Expression
-        if (finding.title and "Custom Expression" in finding.title) or (finding.description and "as_sql" in finding.description.lower()):
-            if "as_sql(" in content and "params" not in content:
-                import re
-                # Very basic attempt to suggest parameterization
-                fixed_content = re.sub(r'def as_sql\(self, compiler, connection\):', 
-                                      'def as_sql(self, compiler, connection, **extra_context):', content)
-                if fixed_content != content:
-                    print(f"[{finding.id}] Applying rule-based fix: Suggested parameterization for Custom Expression")
-                    return fixed_content
+            # 16. Handle request_without_timeout
+            if (finding.title and "request_without_timeout" in finding.title) or (finding.description and "timeout" in finding.description.lower()):
+                 if "requests." in content and "timeout=" not in content:
+                     import re
+                     # Add a default timeout of 10 seconds to requests calls
+                     fixed_content = re.sub(r'(requests\.(get|post|put|delete|patch)\()', r'\1timeout=10, ', content)
+                     if fixed_content != content:
+                         print(f"[{finding.id}] Applying rule-based fix: Added default timeout to requests call")
+                         return fixed_content
 
-        # 15. Handle try_except_pass (Bandit B110)
-        if (finding.title and "try_except_pass" in finding.title) or (finding.description and "except: pass" in finding.description.lower()):
-             if "except:" in content and "pass" in content:
-                 import re
-                 # Replace empty pass with a safety comment or logging
-                 fixed_content = re.sub(r'(except.*:)\s*\n\s+pass', r'\1 # [SECURITY] Do not suppress all errors\n            import logging; logging.error("Exception suppressed")', content)
-                 if fixed_content != content:
-                     print(f"[{finding.id}] Applying rule-based fix: Replaced pass with logging in except block")
-                     return fixed_content
+            # 17. Handle hardcoded_sql_expressions / Sqlalchemy Execute Raw Query / CWE-89 / SQL Injection
+            if finding.title and any(x in finding.title.upper() for x in ["HARDCODED_SQL", "RAW QUERY", "EXECUTE", "CWE-89", "SQL INJECTION"]):
+                 if ".execute(" in content:
+                     import re
+                     lines = content.splitlines()
+                     idx = finding.line_number - 1 if finding.line_number else -1
+                     
+                     if 0 <= idx < len(lines):
+                         line = lines[idx]
+                         if ".execute(" in line:
+                             # 1. False positive check: already parameterized
+                             # Use non-greedy match to ensure we catch the first comma followed by params
+                             if re.search(r'\.execute\(.*?,[\s\n]*[({]', line):
+                                 if "# nosec" not in line and "# [SECURITY]" not in line:
+                                     lines[idx] = line.split('#')[0].rstrip() + " # nosec B608 - already parameterized"
+                                     print(f"[{finding.id}] Applying rule-based fix: Added nosec to line {finding.line_number} (CWE-89 FP)")
+                                     return "\n".join(lines) + "\n"
+                                 return None
 
-        # 16. Handle request_without_timeout
-        if (finding.title and "request_without_timeout" in finding.title) or (finding.description and "timeout" in finding.description.lower()):
-             if "requests." in content and "timeout=" not in content:
-                 import re
-                 # Add a default timeout of 10 seconds to requests calls
-                 fixed_content = re.sub(r'(requests\.(get|post|put|delete|patch)\()', r'\1timeout=10, ', content)
-                 if fixed_content != content:
-                     print(f"[{finding.id}] Applying rule-based fix: Added default timeout to requests call")
-                     return fixed_content
+                             # 2. SQLAlchemy text() check: session.execute, conn.execute, db.execute, engine.execute
+                             if any(kw in line for kw in ["session.execute", "db.execute", "conn.execute", "engine.execute", "connection.execute"]):
+                                 if "text(" not in line:
+                                     # Wrap the argument of execute in text()
+                                     new_line = re.sub(r'(\.execute\()(.*)(\))', r'\1text(\2)\3', line)
+                                     if new_line != line:
+                                         lines[idx] = new_line
+                                         new_content = "\n".join(lines) + "\n"
+                                         if "from sqlalchemy import text" not in new_content:
+                                             new_content = "from sqlalchemy import text\n" + new_content
+                                         print(f"[{finding.id}] Applying rule-based fix: Wrapped SQA execute in text() on line {finding.line_number}")
+                                         return new_content
 
-        # 17. Handle hardcoded_sql_expressions / Sqlalchemy Execute Raw Query / CWE-89 / SQL Injection
-        if finding.title and any(x in finding.title.upper() for x in ["HARDCODED_SQL", "RAW QUERY", "EXECUTE", "CWE-89", "SQL INJECTION"]):
-             if ".execute(" in content:
-                 import re
-                 lines = content.splitlines()
-                 idx = finding.line_number - 1 if finding.line_number else -1
-                 
-                 if 0 <= idx < len(lines):
-                     line = lines[idx]
-                     if ".execute(" in line:
-                         # 1. False positive check: already parameterized
-                         # Use non-greedy match to ensure we catch the first comma followed by params
-                         if re.search(r'\.execute\(.*?,[\s\n]*[({]', line):
-                             if "# nosec" not in line and "# [SECURITY]" not in line:
-                                 lines[idx] = line.split('#')[0].rstrip() + " # nosec B608 - already parameterized"
-                                 print(f"[{finding.id}] Applying rule-based fix: Added nosec to line {finding.line_number} (CWE-89 FP)")
+                             # 3. Fallback: Add security warning if not present
+                             if "[SECURITY]" not in line and "# nosec" not in line:
+                                 lines[idx] = line.rstrip() + " # [SECURITY] Use parameterized queries"
+                                 print(f"[{finding.id}] Applying rule-based fix: Added security warning (CWE-89) to line {finding.line_number}")
                                  return "\n".join(lines) + "\n"
-                             return None
 
-                         # 2. SQLAlchemy text() check: session.execute, conn.execute, db.execute, engine.execute
-                         if any(kw in line for kw in ["session.execute", "db.execute", "conn.execute", "engine.execute", "connection.execute"]):
-                             if "text(" not in line:
-                                 # Wrap the argument of execute in text()
-                                 new_line = re.sub(r'(\.execute\()(.*)(\))', r'\1text(\2)\3', line)
-                                 if new_line != line:
-                                     lines[idx] = new_line
-                                     new_content = "\n".join(lines) + "\n"
-                                     if "from sqlalchemy import text" not in new_content:
-                                         new_content = "from sqlalchemy import text\n" + new_content
-                                     print(f"[{finding.id}] Applying rule-based fix: Wrapped SQA execute in text() on line {finding.line_number}")
-                                     return new_content
+            print(f"[{finding.id}] No deterministic rule found for finding: {finding.title}")
+        
+        # Step 2: Gemini AI Fallback
+        gemini_key = os.getenv("GEMINI_API_KEY", settings.gemini_api_key)
+            
+        if gemini_key:
+            try:
+                from google import genai
+                mode_str = " (BATCH FORCE)" if force_ai else ""
+                print(f"[{finding.id}] DEBUG: Gemini API Key found. Attempting AI resolution for finding{mode_str}.")
+                client = genai.Client(api_key=gemini_key)
+                
+                prompt = f"""
+                You are an expert security engineer fixing vulnerabilities in code.
+                I have a security finding to resolve:
+                
+                Finding Title: {finding.title}
+                Finding Description: {finding.description}
+                Severity: {finding.severity}
+                
+                Rewrite the following code file to fix the vulnerability. 
+                Return ONLY the raw fixed code. Do not include markdown code blocks (like ```python) and do not provide any explanation.
+                
+                Code:
+                {content}
+                """
+                
+                response = client.models.generate_content(
+                    model='gemini-2.5-flash',
+                    contents=prompt,
+                )
+                
+                fixed_code = response.text.strip()
+                if fixed_code.startswith("```"):
+                    lines = fixed_code.split("\n")
+                    if len(lines) > 2 and lines[-1].strip() == "```":
+                        fixed_code = "\n".join(lines[1:-1])
+                        
+                if fixed_code and fixed_code != content:
+                    print(f"[{finding.id}] Gemini AI successfully generated a fix")
+                    return fixed_code
+                    
+            except Exception as e:
+                print(f"[{finding.id}] ERROR in Gemini AI fallback: {e}")
 
-                         # 3. Fallback: Add security warning if not present
-                         if "[SECURITY]" not in line and "# nosec" not in line:
-                             lines[idx] = line.rstrip() + " # [SECURITY] Use parameterized queries"
-                             print(f"[{finding.id}] Applying rule-based fix: Added security warning (CWE-89) to line {finding.line_number}")
-                             return "\n".join(lines) + "\n"
-
-        print(f"[{finding.id}] No deterministic rule found for finding: {finding.title}")
         return None
 
     def _fix_dependency(self, content: str, finding: Finding) -> Optional[str]:

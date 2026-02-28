@@ -7,6 +7,7 @@ from ..models import APIKey, User
 from ..core.db import get_session
 from ..core.rate_limiter import check_rate_limit
 from ..core.auth import SECRET_KEY, ALGORITHM
+from ..core.billing_plans import get_plan
 from ..schemas import TokenData
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/token", auto_error=False)
@@ -104,10 +105,14 @@ def get_user_enforce_quota(
         )
         is_scan = enforce_quota == "scan"
         is_resolve = enforce_quota == "resolve"
-        effective_rate = user.rate_limit_per_minute if (is_scan or is_resolve) else user.rate_limit_per_minute * 5
         
-        scan_quota = user.scan_quota_per_month if user.scan_quota_per_month is not None else 2
-        resolve_quota = user.resolve_quota_per_month if user.resolve_quota_per_month is not None else 2
+        # Scans are limited to 10/min. Everything else (resolves, api calls) is 50/min.
+        effective_rate = user.rate_limit_per_minute if is_scan else user.rate_limit_per_minute * 5
+        
+        # Fallback to plan defaults instead of hardcoded 2
+        plan_config = get_plan(user.plan)
+        scan_quota = user.scan_quota_per_month if user.scan_quota_per_month is not None else plan_config["scan_quota"]
+        resolve_quota = user.resolve_quota_per_month if user.resolve_quota_per_month is not None else plan_config["resolve_quota"]
 
         check_rate_limit(
             user_id=str(user.id),

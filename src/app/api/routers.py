@@ -7,9 +7,10 @@ from datetime import date
 from ..schemas import ScanCreate, ScanRead, ResolutionRequest, ResolutionResponse, FindingRead, UsageRead, UserUsageResponse, UserProfileRead, UserProfileUpdate
 from ..models import Scan, User, APIKey, Usage, Finding
 from ..core.db import get_session
+from ..core.billing_plans import get_plan
 from ..services.scanner import enqueue_scan, get_scan_result
 from ..services.resolution import ResolutionService
-from ..services.billing import renew_subscription
+from ..services.billing import renew_subscription, subscribe_user_to_plan
 from .deps import get_user_from_api_key, get_user_no_quota, get_user_enforce_scan_quota, get_user_enforce_resolve_quota
 import secrets
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
@@ -88,8 +89,9 @@ def get_user_usage(session: Session = Depends(get_session), user: User = Depends
     month_resolves = sum(r.resolutions_count or 0 for r in monthly_rows)
     month_usage = month_scans + month_resolves
 
-    scan_quota = user.scan_quota_per_month if user.scan_quota_per_month is not None else 2
-    resolve_quota = user.resolve_quota_per_month if user.resolve_quota_per_month is not None else 2
+    plan_config = get_plan(user.plan)
+    scan_quota = user.scan_quota_per_month if user.scan_quota_per_month is not None else plan_config["scan_quota"]
+    resolve_quota = user.resolve_quota_per_month if user.resolve_quota_per_month is not None else plan_config["resolve_quota"]
     combined_quota = scan_quota + resolve_quota
 
     percentage_left = max(0.0, ((combined_quota - month_usage) / combined_quota) * 100) if combined_quota > 0 else 0.0
@@ -234,6 +236,40 @@ def renew_monthly_quota_subscription(
     session.commit()
 
     return {"status": "success", "message": f"Monthly quota renewed for user {user.email}"}
+
+
+@router.post("/user/subscription/team")
+def subscribe_team_plan(
+    session: Session = Depends(get_session),
+    user: User = Depends(get_user_no_quota)
+):
+    """
+    Subscribe the current user to the TEAM plan.
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    subscribe_user_to_plan(user.id, "team", session)
+    session.commit()
+
+    return {"status": "success", "message": f"User {user.email} successfully subscribed to TEAM plan."}
+
+
+@router.post("/user/subscription/enterprise")
+def subscribe_enterprise_plan(
+    session: Session = Depends(get_session),
+    user: User = Depends(get_user_no_quota)
+):
+    """
+    Subscribe the current user to the ENTERPRISE plan.
+    """
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    subscribe_user_to_plan(user.id, "enterprise", session)
+    session.commit()
+
+    return {"status": "success", "message": f"User {user.email} successfully subscribed to ENTERPRISE plan."}
 
 
 @router.get("/metrics")

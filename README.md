@@ -107,7 +107,10 @@ Every user is assigned a plan that controls their monthly scan and resolution li
 - Check your current plan and quotas at `GET /api/v1/user/profile`.
 - Check current-month usage at `GET /api/v1/user/usage`.
 - When a quota is exceeded the API returns `403` with a descriptive message indicating which quota was hit and that an upgrade is required.
-- Renew / reset your monthly quotas with `POST /api/v1/user/subscription/renew`.
+- **Upgrade/Transition Plans**:
+  - `POST /api/v1/user/subscription/team`: Move to the **Team** tier.
+  - `POST /api/v1/user/subscription/enterprise`: Move to the **Enterprise** tier.
+- Renew / reset your current monthly quotas with `POST /api/v1/user/subscription/renew`.
 
 ---
 
@@ -152,7 +155,9 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
 | `PUT` | `/api/v1/user/profile` | ✅ | Update optional attributes (like `slack_webhook_url` or `github_token`) |
 | `GET` | `/api/v1/user/usage` | ✅ | Get usage history and current-month credit summary |
 | `POST` | `/api/v1/user/api-key` | ✅ | Generate a new API key for the authenticated user |
-| `POST` | `/api/v1/user/subscription/renew` | ✅ | Renew monthly quota (optionally pass `?amount=100.0`) |
+| `POST` | `/api/v1/user/subscription/team` | ✅ | Upgrade user to the Team Tier |
+| `POST` | `/api/v1/user/subscription/enterprise` | ✅ | Upgrade user to the Enterprise Tier |
+| `POST` | `/api/v1/user/subscription/renew` | ✅ | Renew current monthly quota (optionally pass `?amount=100.0`) |
 
 ```bash
 # Update user profile
@@ -167,6 +172,10 @@ curl http://localhost:8000/api/v1/user/usage \
 
 # Renew quota
 curl -X POST "http://localhost:8000/api/v1/user/subscription/renew?amount=100.0" \
+     -H "Authorization: Bearer <JWT_TOKEN>"
+
+# Upgrade to Team Plan
+curl -X POST http://localhost:8000/api/v1/user/subscription/team \
      -H "Authorization: Bearer <JWT_TOKEN>"
 ```
 

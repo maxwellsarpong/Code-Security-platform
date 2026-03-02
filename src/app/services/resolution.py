@@ -518,6 +518,7 @@ class ResolutionService:
                      if fixed_content != content:
                          print(f"[{finding.id}] Applying rule-based fix: Replaced pass with logging in except block")
                          return fixed_content
+                     return None
 
             # 16. Handle request_without_timeout
             if (finding.title and "request_without_timeout" in finding.title) or (finding.description and "timeout" in finding.description.lower()):
@@ -566,6 +567,7 @@ class ResolutionService:
                                  lines[idx] = line.rstrip() + " # [SECURITY] Use parameterized queries"
                                  print(f"[{finding.id}] Applying rule-based fix: Added security warning (CWE-89) to line {finding.line_number}")
                                  return "\n".join(lines) + "\n"
+                             return None
 
             print(f"[{finding.id}] No deterministic rule found for finding: {finding.title}")
         

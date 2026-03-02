@@ -77,3 +77,33 @@ def renew_subscription(user_id: UUID, amount: float, session: Session):
     # We assume the caller will commit the session
     return True
 
+
+def subscribe_user_to_plan(user_id: UUID, plan_name: str, session: Session):
+    """Updates a user's plan and resets their monthly quotas."""
+    from ..models import User
+    from ..core.rate_limiter import reset_monthly_quota
+
+    user = session.get(User, user_id)
+    if not user:
+        return False
+
+    # 1. Update User Plan and clear custom quotas to force plan-based fallback
+    user.plan = plan_name
+    user.scan_quota_per_month = None
+    user.resolve_quota_per_month = None
+    session.add(user)
+
+    # 2. Reset Redis quota counters
+    reset_monthly_quota(str(user_id), quota_type="scan")
+    reset_monthly_quota(str(user_id), quota_type="resolve")
+
+    # 3. Record billing event
+    evt = BillingEvent(
+        user_id=user_id,
+        event_type="subscription_upgraded",
+        amount=0.0, # Placeholder for payment logic
+        meta={"new_plan": plan_name, "action": "tier_subscription"}
+    )
+    session.add(evt)
+    return True
+

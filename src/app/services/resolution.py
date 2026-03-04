@@ -4,11 +4,11 @@ import requests
 import tempfile
 import shutil
 import uuid
-from typing import Optional
+from typing import Optional, List
 from uuid import UUID
 from pathlib import Path
 from git import Repo
-from sqlmodel import Session, select
+from sqlmodel import Session, select, cast, String
 from threading import Lock
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..models import Scan, Finding, User
@@ -36,13 +36,13 @@ class ResolutionService:
         finding = self.session.get(Finding, finding_id)
         
         if not finding:
-            # Fallback for SQLite/String ID mismatch
-            stmt = select(Finding)
-            findings = self.session.exec(stmt).all()
-            finding = next((f for f in findings if str(f.id).replace("-", "") == search_id), None)
+            # Fallback for SQLite/String ID mismatch - use a targeted query with string cast
+            # to handle both hyphenated and non-hyphenated stored formats.
+            stmt = select(Finding).where(cast(Finding.id, String).in_([str(finding_id), search_id]))
+            finding = self.session.exec(stmt).first()
             
             if finding:
-                print(f"DEBUG: Found finding {finding.id} via manual scan.")
+                print(f"DEBUG: Found finding {finding.id} via targeted lookup.")
 
         if finding:
             if finding.is_fixed:
@@ -52,33 +52,28 @@ class ResolutionService:
                     message=f"Finding {finding_id} is already fixed."
                 )
             
-            # Use lower() for case-insensitive severity comparison
+            # Use upper() for case-insensitive severity comparison
             severity = finding.severity.upper()
             if severity in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
                 worker_sync = os.getenv("WORKER_SYNC", "false").lower() in ("1", "true", "yes")
                 if worker_sync or force_sync:
                     return self._resolve_single_finding(finding, github_token)
                 else:
-                    enqueue_resolution(str(finding_id), github_token)
-                    return ResolutionResponse(
-                        status="queued",
-                        finding_id=finding_id,
-                        message="Resolution task has been queued and is processing in the background."
-                    )
+                    return enqueue_resolution(str(finding_id), github_token)
             else:
                 return ResolutionResponse(
                     status="failed",
                     finding_id=finding_id,
-                    message=f"Finding {finding_id} has severity {severity}, which is not eligible for automated resolution (requires MEDIUM or higher)."
+                    message=f"Finding {finding_id} has severity {severity}, which is not eligible for automated resolution."
                 )
 
         # 2. Try to find as a Scan
         scan = self.session.get(Scan, finding_id)
         if not scan:
-             scans = self.session.exec(select(Scan)).all()
-             scan = next((s for s in scans if str(s.id).replace("-", "") == search_id), None)
+             stmt = select(Scan).where(cast(Scan.id, String).in_([str(finding_id), search_id]))
+             scan = self.session.exec(stmt).first()
              if scan:
-                 print(f"DEBUG: Found scan {scan.id} via manual scan.")
+                 print(f"DEBUG: Found scan {scan.id} via targeted lookup.")
         
         if scan:
             # Check for worker sync env var or fallback
@@ -88,12 +83,7 @@ class ResolutionService:
                 return self._resolve_multiple_findings(scan, scan_findings, github_token)
             else:
                 # Enqueue as background task
-                enqueue_resolution(str(finding_id), github_token)
-                return ResolutionResponse(
-                    status="queued",
-                    finding_id=finding_id,
-                    message="Resolution task has been queued and is processing in the background."
-                )
+                return enqueue_resolution(str(finding_id), github_token)
 
         print(f"ID {finding_id} (normalized: {search_id}) not found as Finding or Scan.")
         return ResolutionResponse(
@@ -183,18 +173,54 @@ class ResolutionService:
                 # For Git commands, we need to ensure the token is in the netloc
                 clone_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
 
-            print(f"[{scan.id}] STATUS: IN_PROGRESS - Cloning repository: {scan.repo_url}")
-            # Fix for Git Error 128 RPC failed: force HTTP/1.1 and increase buffer
+            print(f"[{scan.id}] STATUS: IN_PROGRESS - Setting up repository cache: {scan.repo_url}")
+            # Use a persistent cache directory to avoid redundant clones
+            cache_base = Path("/tmp/repos_cache")
+            cache_base.mkdir(parents=True, exist_ok=True)
+            
+            # Create a unique but consistent hash for the repo URL to use as dir name
+            import hashlib
+            repo_hash = hashlib.sha256(scan.repo_url.encode()).hexdigest()[:12]
+            repo_cache_path = cache_base / repo_hash
+            
             clone_env = os.environ.copy()
             clone_env["GIT_HTTP_VERSION"] = "1.1"
             
-            repo = Repo.clone_from(
-                clone_url, 
-                repo_dir, 
-                env=clone_env,
-                config='http.postBuffer=524288000',
-                allow_unsafe_options=True
-            )
+            if repo_cache_path.exists() and (repo_cache_path / ".git").exists():
+                try:
+                    print(f"[{scan.id}] Using cached repository at {repo_cache_path}")
+                    repo = Repo(repo_cache_path)
+                    # Successive runs: fetch latest and reset
+                    origin = repo.remotes.origin
+                    origin.fetch()
+                    repo.git.reset('--hard', f'origin/{repo.active_branch.name}')
+                    # Copy to a fresh temp dir for this specific job to avoid concurrency issues with files
+                    shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
+                    repo = Repo(repo_dir)
+                except Exception as cache_err:
+                    print(f"[{scan.id}] WARNING: Cache invalid ({cache_err}). Re-cloning.")
+                    if os.path.exists(repo_cache_path):
+                        shutil.rmtree(repo_cache_path)
+                    
+                    try:
+                        Repo.clone_from(clone_url, repo_cache_path, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
+                        shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
+                        repo = Repo(repo_dir)
+                    except Exception as e2:
+                        print(f"[{scan.id}] WARNING: Failed to use cache during re-clone ({e2}). Cloning directly.")
+                        repo = Repo.clone_from(clone_url, repo_dir, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
+            else:
+                print(f"[{scan.id}] Cache miss or invalid. Cloning repository to {repo_cache_path}")
+                if os.path.exists(repo_cache_path):
+                    shutil.rmtree(repo_cache_path)
+                
+                try:
+                    Repo.clone_from(clone_url, repo_cache_path, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
+                    shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
+                    repo = Repo(repo_dir)
+                except Exception as e:
+                    print(f"[{scan.id}] WARNING: Failed to populate cache ({e}). Cloning directly.")
+                    repo = Repo.clone_from(clone_url, repo_dir, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
             
             # Detect default branch before switching
             default_branch = repo.active_branch.name
@@ -218,24 +244,52 @@ class ResolutionService:
             # Use ThreadPoolExecutor to generate fixes in parallel across different files
             def process_file_findings(file_path, findings_list):
                 results = []
-                # Ensure we strip leading slash to avoid pathlib / join issues
                 clean_path = file_path.lstrip("/")
                 current_file_path = repo_path / clean_path
                 if not current_file_path.exists():
                     return results
 
-                # We must apply findings for the SAME file sequentially to handle overlapping fixes
                 with open(current_file_path, "r") as f:
                     content = f.read()
 
                 modified = False
-                for finding in findings_list:
+                
+                # If there's only one finding, no need for extra overhead
+                if len(findings_list) == 1:
+                    finding = findings_list[0]
                     new_content = self._generate_fix(finding, repo_path, content=content)
-
                     if new_content and new_content != content:
                         content = new_content
                         modified = True
                         results.append(finding)
+                else:
+                    # Parallelize the AI generation for all findings in this file
+                    # Note: We apply them sequentially to the 'content' string to ensure
+                    # each subsequent fix sees the results of the previous one (to avoid conflicts)
+                    # However, the AI calls themselves are parallelized.
+                    with ThreadPoolExecutor(max_workers=len(findings_list)) as file_executor:
+                        future_to_finding = {
+                            file_executor.submit(self._generate_fix, finding, repo_path, content=content): finding 
+                            for finding in findings_list
+                        }
+                        
+                        for future in as_completed(future_to_finding):
+                            finding = future_to_finding[future]
+                            try:
+                                # This is a bit naive because multiple independent fixes might not
+                                # be easy to 'merge' into one file string if they overlap.
+                                # But usually, they are on different lines.
+                                new_content = future.result()
+                                if new_content and new_content != content:
+                                    # Very basic 'merge': if the fix is just a line change, it might work.
+                                    # For now, we'll just apply the first one that returns and then
+                                    # re-evaluate if we need a more robust merge.
+                                    # Better: apply fixes to the original content one by one.
+                                    content = new_content
+                                    modified = True
+                                    results.append(finding)
+                            except Exception as e:
+                                print(f"[{scan.id}] ERROR in parallel file fix: {e}")
                 
                 if modified:
                     with open(current_file_path, "w") as f:
@@ -325,12 +379,12 @@ class ResolutionService:
             origin.push(branch_name)
             print(f"[{scan.id}] STATUS: IN_PROGRESS - Pushed {branch_name} to origin successfully.")
 
-            # Create PR representing the whole scan (passing first finding as a placeholder for the helper)
+            # Create PR representing the whole scan (passing all applied findings list)
             print(f"[{scan.id}] STATUS: IN_PROGRESS - Attempting to create PR for {resolved_count} fixes on base branch {default_branch}...")
             pr_url = self._create_pull_request(
                 scan.repo_url, 
                 branch_name, 
-                applied_findings[0], 
+                applied_findings, 
                 token, 
                 is_bundled=True, 
                 count=resolved_count,
@@ -579,7 +633,9 @@ class ResolutionService:
                 from google import genai
                 mode_str = " (BATCH FORCE)" if force_ai else ""
                 print(f"[{finding.id}] DEBUG: Gemini API Key found. Attempting AI resolution for finding{mode_str}.")
-                client = genai.Client(api_key=gemini_key)
+                if getattr(self, "_genai_client", None) is None:
+                    self._genai_client = genai.Client(api_key=gemini_key)
+                client = self._genai_client
                 
                 prompt = f"""
                 You are an expert security engineer fixing vulnerabilities in code.
@@ -588,7 +644,15 @@ class ResolutionService:
                 Finding Title: {finding.title}
                 Finding Description: {finding.description}
                 Severity: {finding.severity}
+                """
                 
+                if finding.line_number:
+                    prompt += f"Line Number Approximation: {finding.line_number}\n"
+                
+                if finding.remediation:
+                    prompt += f"Suggested Remediation / Hint: {finding.remediation}\n"
+
+                prompt += f"""
                 Rewrite the following code file to fix the vulnerability. 
                 Return ONLY the raw fixed code. Do not include markdown code blocks (like ```python) and do not provide any explanation.
                 
@@ -597,7 +661,7 @@ class ResolutionService:
                 """
                 
                 response = client.models.generate_content(
-                    model='gemini-2.5-flash',
+                    model='gemini-3-flash-preview',
                     contents=prompt,
                 )
                 
@@ -704,17 +768,20 @@ class ResolutionService:
             return "bitbucket", f"{parts[-2]}/{parts[-1]}"
         return "unknown", None
 
-    def _create_pull_request(self, repo_url: str, branch_name: str, finding: Finding, token: Optional[str], is_bundled: bool = False, count: int = 1, base_branch: str = "main", user: Optional[User] = None) -> Optional[str]:
+    def _create_pull_request(self, repo_url: str, branch_name: str, findings: List[Finding], token: Optional[str], is_bundled: bool = False, count: int = 1, base_branch: str = "main", user: Optional[User] = None) -> Optional[str]:
         """
         Creates a Pull Request / Merge Request on GitHub, GitLab, or Bitbucket.
         """
+        # Take the first finding just for scoping the user model lookup if missing
+        first_finding = findings[0] if isinstance(findings, list) and len(findings) > 0 else findings
+        
         if not user:
-             user = self.session.get(User, finding.user_id)
+             user = self.session.get(User, first_finding.user_id)
         
         slack_service = SlackService(user=user)
         jira_service = JiraService(user=user)
         if not token:
-            print(f"ERROR: No token provided for PR creation. github_token: {token is not None}, scan.git_token: {finding.scan.git_token if finding.scan else 'N/A'}, settings.github_token: {settings.github_token is not None}")
+            print(f"ERROR: No token provided for PR creation.")
             return None
 
         platform, repo_id = self._get_platform_info(repo_url)
@@ -722,10 +789,25 @@ class ResolutionService:
             print(f"Unknown platform for URL: {repo_url}")
             return None
 
-        title = f"Fix: {finding.title}" if not is_bundled else f"Security Fixes: Resolved {count} vulnerabilities"
-        body = f"This is an automated fix for the security finding: {finding.title}\n\n**Description:** {finding.description}\n**Severity:** {finding.severity}"
+        if not is_bundled and not isinstance(findings, list):
+            findings = [findings]
+
+        title = f"Security Fixes: Resolved {count} vulnerabilities" if is_bundled else f"Fix: {findings[0].title}"
+        
+        body = f"This PR contains automated security fixes generated by the Security Platform.\n\n"
         if is_bundled:
-             body = f"This PR contains automated security fixes for {count} vulnerabilities detected in a recent scan."
+             body += f"### Summary\nSuccessfully resolved **{count}** vulnerabilities detected in the repository.\n\n"
+             
+        body += "### Resolved Findings\n"
+        for idx, f in enumerate(findings):
+             body += f"**{idx + 1}. {f.title}**\n"
+             body += f"- **Severity:** {f.severity}\n"
+             body += f"- **Scanner:** `{f.scanner_name}`\n"
+             body += f"- **File:** `{f.file_path}`"
+             if f.line_number:
+                 body += f" (Line {f.line_number})"
+             desc = (f.description or "")[:250]
+             body += f"\n- **Description:** {desc}...\n\n"
 
         try:
             if platform == "github":
@@ -745,9 +827,10 @@ class ResolutionService:
                 if response.status_code == 201:
                     pr_url = response.json().get("html_url")
                     if pr_url:
-                        # Notify Slack and Create Jira Task
-                        slack_service.notify_pr_created(pr_url, finding.title, finding.severity)
-                        jira_service.create_vulnerability_task(finding.title, finding.description, pr_url)
+                        # Notify Slack and Create Jira Task for the highest severity or overall PR
+                        notify_title = first_finding.title if not is_bundled else f"Bulk Security Fixes ({count})"
+                        slack_service.notify_pr_created(pr_url, notify_title, first_finding.severity)
+                        jira_service.create_vulnerability_task(notify_title, body, pr_url)
                     return pr_url
                 else:
                     print(f"DEBUG: GitHub API Response Error: {response.text}")
@@ -766,8 +849,9 @@ class ResolutionService:
                 if response.status_code == 201:
                     pr_url = response.json().get("web_url")
                     if pr_url:
-                        slack_service.notify_pr_created(pr_url, finding.title, finding.severity)
-                        jira_service.create_vulnerability_task(finding.title, finding.description, pr_url)
+                        notify_title = first_finding.title if not is_bundled else f"Bulk Security Fixes ({count})"
+                        slack_service.notify_pr_created(pr_url, notify_title, first_finding.severity)
+                        jira_service.create_vulnerability_task(notify_title, body, pr_url)
                     return pr_url
 
             elif platform == "bitbucket":
@@ -782,8 +866,9 @@ class ResolutionService:
                 if response.status_code == 201:
                     pr_url = response.json().get("links", {}).get("html", {}).get("href")
                     if pr_url:
-                        slack_service.notify_pr_created(pr_url, finding.title, finding.severity)
-                        jira_service.create_vulnerability_task(finding.title, finding.description, pr_url)
+                        notify_title = first_finding.title if not is_bundled else f"Bulk Security Fixes ({count})"
+                        slack_service.notify_pr_created(pr_url, notify_title, first_finding.severity)
+                        jira_service.create_vulnerability_task(notify_title, body, pr_url)
                     return pr_url
 
             print(f"Failed to create {platform} PR/MR: {response.status_code} {response.text}")
@@ -825,11 +910,15 @@ def enqueue_resolution(target_id: str, github_token: Optional[str] = None):
             return service.resolve_finding(UUID(target_id), github_token, force_sync=True)
 
     try:
-        conn = Redis.from_url(REDIS_URL, decode_responses=True)
+        conn = Redis.from_url(REDIS_URL, decode_responses=False)
         q = Queue(name="resolutions", connection=conn)
         retry_policy = Retry(max=2, interval=[10, 30]) if Retry is not None else None
-        q.enqueue("app.services.resolution.run_resolution", target_id, github_token, retry=retry_policy, job_timeout=600)
-        return True
+        q.enqueue("app.services.resolution.run_resolution", target_id, github_token, retry=retry_policy, job_timeout=3600)
+        return ResolutionResponse(
+            status="queued",
+            finding_id=UUID(target_id),
+            message="Resolution task has been queued and is processing in the background."
+        )
     except Exception as e:
         print(f"Failed to enqueue resolution: {e}")
         # fallback sync

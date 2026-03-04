@@ -3,7 +3,7 @@ WORKDIR /app
 
 # Install system dependencies (build tools + git + curl for scanners)
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends gcc build-essential git curl \
+    && apt-get install -y --no-install-recommends gcc build-essential git curl nodejs npm \
     && ARCH=$(uname -m) \
     && if [ "$ARCH" = "x86_64" ]; then OSV_ARCH="linux_amd64"; else OSV_ARCH="linux_arm64"; fi \
     && curl -L "https://github.com/google/osv-scanner/releases/download/v1.9.1/osv-scanner_${OSV_ARCH}" -o /usr/local/bin/osv-scanner \

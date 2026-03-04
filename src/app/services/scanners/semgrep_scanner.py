@@ -71,11 +71,17 @@ class SemgrepScanner(BaseScanner):
         results = []
         
         try:
-            # Run Semgrep with auto config (uses community rules)
+            # Run Semgrep with carefully selected rulesets for robust scanning
             cmd = [
                 "semgrep",
                 "scan",
-                "--config", "auto",  # Use Semgrep Registry rules
+                # Explicit rulesets for deep security analysis
+                "--config", "p/default",
+                "--config", "p/security-audit",
+                "--config", "p/secrets",
+                "--config", "p/owasp-top-ten",
+                "--config", "p/javascript",
+                "--config", "p/typescript",
                 "--json",  # JSON output
                 "--quiet",  # Suppress progress
                 "--exclude", "node_modules",

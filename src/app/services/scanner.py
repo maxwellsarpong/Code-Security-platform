@@ -80,7 +80,7 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
     start_time = time.time()
 
     from ..core import db
-    from .scanners import BanditScanner, PipAuditScanner, CheckovScanner, SemgrepScanner, OSVScanner
+    from .scanners import BanditScanner, PipAuditScanner, CheckovScanner, SemgrepScanner, OSVScanner, NpmAuditScanner, RetirejsScanner
     from git import Repo
     import tempfile
     import shutil
@@ -150,6 +150,8 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
             SemgrepScanner(),  # Multi-language scanner (runs first for broad coverage)
             BanditScanner(),   # Python-specific
             PipAuditScanner(), # Python dependencies
+            NpmAuditScanner(), # Node.js dependencies
+            RetirejsScanner(), # Bundled JS Library dependencies (e.g. jQuery)
             CheckovScanner(),  # IaC
             OSVScanner()       # Multi-lang dependencies (JS, Go, Rust, etc.)
         ]

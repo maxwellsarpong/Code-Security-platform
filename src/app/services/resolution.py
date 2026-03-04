@@ -689,16 +689,18 @@ class ResolutionService:
         Detects platform (GitHub, GitLab, Bitbucket) and extracts repository ID.
         """
         repo_url = repo_url.rstrip('/')
+        if repo_url.endswith('.git'):
+            repo_url = repo_url[:-4]
+            
         if "github.com" in repo_url:
-            parts = repo_url.replace('.git', '').split('/')
+            parts = repo_url.split('/')
             return "github", f"{parts[-2]}/{parts[-1]}"
         elif "gitlab.com" in repo_url:
             from urllib.parse import urlparse
             path = urlparse(repo_url).path.strip('/')
-            repo_id = path.replace('.git', '')
-            return "gitlab", repo_id
+            return "gitlab", path
         elif "bitbucket.org" in repo_url:
-            parts = repo_url.replace('.git', '').split('/')
+            parts = repo_url.split('/')
             return "bitbucket", f"{parts[-2]}/{parts[-1]}"
         return "unknown", None
 
@@ -728,8 +730,9 @@ class ResolutionService:
         try:
             if platform == "github":
                 headers = {
-                    "Authorization": f"token {token}",
-                    "Accept": "application/vnd.github.v3+json"
+                    "Authorization": f"Bearer {token}",
+                    "Accept": "application/vnd.github.v3+json",
+                    "X-GitHub-Api-Version": "2022-11-28"
                 }
                 data = {
                     "title": title,

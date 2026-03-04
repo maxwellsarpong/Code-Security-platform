@@ -79,30 +79,47 @@ def renew_subscription(user_id: UUID, amount: float, session: Session):
 
 
 def subscribe_user_to_plan(user_id: UUID, plan_name: str, session: Session):
-    """Updates a user's plan and resets their monthly quotas."""
+    """Updates a user's plan and cumulatively adds new plan quotas to their existing limit."""
     from ..models import User
     from ..core.rate_limiter import reset_monthly_quota
+    from ..core.billing_plans import get_plan
 
     user = session.get(User, user_id)
     if not user:
         return False
 
-    # 1. Update User Plan and clear custom quotas to force plan-based fallback
+    # 1. Fetch baseline quotas for the NEW plan
+    new_plan_config = get_plan(plan_name)
+    
+    # 2. Fetch current effective quotas (explicit or plan-inherited)
+    from ..core.billing_plans import get_plan as get_baseline
+    current_plan_config = get_baseline(user.plan)
+    
+    current_scan_quota = user.scan_quota_per_month if user.scan_quota_per_month is not None else current_plan_config["scan_quota"]
+    current_resolve_quota = user.resolve_quota_per_month if user.resolve_quota_per_month is not None else current_plan_config["resolve_quota"]
+
+    # 3. Additive Logic: New Limit = Current Limit + New Plan Baseline
+    user.scan_quota_per_month = current_scan_quota + new_plan_config["scan_quota"]
+    user.resolve_quota_per_month = current_resolve_quota + new_plan_config["resolve_quota"]
     user.plan = plan_name
-    user.scan_quota_per_month = None
-    user.resolve_quota_per_month = None
+    
     session.add(user)
 
-    # 2. Reset Redis quota counters
+    # 4. Reset Redis quota counters (optional: user starts fresh with new limits)
     reset_monthly_quota(str(user_id), quota_type="scan")
     reset_monthly_quota(str(user_id), quota_type="resolve")
 
-    # 3. Record billing event
+    # 5. Record billing event
     evt = BillingEvent(
         user_id=user_id,
         event_type="subscription_upgraded",
-        amount=0.0, # Placeholder for payment logic
-        meta={"new_plan": plan_name, "action": "tier_subscription"}
+        amount=0.0,
+        meta={
+            "new_plan": plan_name, 
+            "action": "tier_subscription_additive",
+            "added_scans": new_plan_config["scan_quota"],
+            "total_scans": user.scan_quota_per_month
+        }
     )
     session.add(evt)
     return True

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl, ConfigDict, field_validator
+from pydantic import BaseModel, HttpUrl, ConfigDict, model_validator
 from typing import Optional, List
 from uuid import UUID
 from datetime import datetime, date
@@ -26,18 +26,22 @@ class UserProfileRead(BaseModel):
     id: UUID
     email: str
     plan: str
-    scan_quota_per_month: int = 2
-    resolve_quota_per_month: int = 2
+    scan_quota_per_month: Optional[int] = None
+    resolve_quota_per_month: Optional[int] = None
     slack_webhook_url: Optional[str] = None
     jira_url: Optional[str] = None
     is_superuser: bool = False
     created_at: datetime
 
-    @field_validator('scan_quota_per_month', 'resolve_quota_per_month', mode='before')
-    @classmethod
-    def default_quota_if_null(cls, v):
-        """Backfill NULL DB values (from pre-migration rows) with the Free plan default."""
-        return v if v is not None else 2
+    @model_validator(mode='after')
+    def backfill_quotas(self) -> "UserProfileRead":
+        from .core.billing_plans import get_plan
+        plan_config = get_plan(self.plan)
+        if self.scan_quota_per_month is None:
+            self.scan_quota_per_month = plan_config["scan_quota"]
+        if self.resolve_quota_per_month is None:
+            self.resolve_quota_per_month = plan_config["resolve_quota"]
+        return self
 
     model_config = ConfigDict(from_attributes=True)
 

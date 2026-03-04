@@ -27,6 +27,14 @@ services:
       - DATABASE_URL=sqlite:////data/dev.db
       - WORKER_METRICS_PORT=9100
       - SENTRY_DSN=
+      - SCAN_PARALLELISM=2
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          memory: 512M
     ports:
       - "9100:9100"
     volumes:

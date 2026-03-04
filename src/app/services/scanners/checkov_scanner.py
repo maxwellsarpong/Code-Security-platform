@@ -70,18 +70,25 @@ class CheckovScanner(BaseScanner):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=600  # 10 minute timeout
             )
             
             # Parse JSON output
             if result.stdout:
                 data = json.loads(result.stdout)
-                # checkov can return a list or a single object depending on version/args
-                checks = data.get("results", {}).get("failed_checks", []) if isinstance(data, dict) else []
-                print(f"Checkov found {len(checks)} issues.")
                 
-                # Checkov returns results per framework
-                for check_type in data.get("results", {}).get("failed_checks", []):
+                # Checkov returns a list if multiple frameworks are scanned, or a single dict
+                all_failed_checks = []
+                if isinstance(data, list):
+                    for item in data:
+                        checks = item.get("results", {}).get("failed_checks", [])
+                        all_failed_checks.extend(checks)
+                elif isinstance(data, dict):
+                    all_failed_checks = data.get("results", {}).get("failed_checks", [])
+                
+                print(f"Checkov found {len(all_failed_checks)} issues.")
+                
+                for check_type in all_failed_checks:
                     # Extract file path relative to repo
                     file_path = check_type.get("file_path", "")
                     if file_path.startswith(str(repo_path)):

@@ -54,7 +54,7 @@ class OSVScanner(BaseScanner):
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=300
+                timeout=600
             )
             
             if not result.stdout:

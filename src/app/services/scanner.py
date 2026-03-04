@@ -52,7 +52,7 @@ def enqueue_scan(scan_id, user_id: Optional[str] = None):
         q = Queue(name="scans", connection=conn)
         # enqueue the function by import path so worker can import it
         retry_policy = Retry(max=3, interval=[10, 30, 60]) if Retry is not None else None
-        q.enqueue("app.services.scanner.schedule_scan", scan_id, user_id, retry=retry_policy, job_timeout=300)
+        q.enqueue("app.services.scanner.schedule_scan", scan_id, user_id, retry=retry_policy, job_timeout=1200)
         return True
     except Exception:
         # if enqueue fails, run sync as a best-effort fallback
@@ -132,7 +132,12 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
 
         try:
             print(f"Cloning repository: {scan.repo_url}") # Log without token
-            Repo.clone_from(clone_url, repo_dir, depth=1)
+            # Force HTTP/1.1 and larger buffer for stability on complex repos
+            env = os.environ.copy()
+            env["GIT_HTTP_LOW_SPEED_LIMIT"] = "0"
+            env["GIT_HTTP_LOW_SPEED_TIME"] = "999999"
+            
+            Repo.clone_from(clone_url, repo_dir, depth=1, env=env)
         except Exception as e:
             # Redact token from error message if possible
             error_msg = str(e)
@@ -154,11 +159,20 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
         
         def run_scanner(scanner_instance, path):
             if scanner_instance.is_applicable(path):
-                print(f"Starting scanner: {scanner_instance.get_name()}")
-                return scanner_instance.scan(path)
+                print(f"[{scan_id}] Starting scanner: {scanner_instance.get_name()}")
+                try:
+                    results = scanner_instance.scan(path)
+                    print(f"[{scan_id}] Scanner {scanner_instance.get_name()} completed. Found {len(results)} issues.")
+                    return results
+                except Exception as e:
+                    print(f"[{scan_id}] Scanner {scanner_instance.get_name()} failed: {e}")
+                    raise
             return []
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        # Vertical Scaling: adjust parallelism via ENV (default 2 for stability)
+        scan_parallelism = int(os.getenv("SCAN_PARALLELISM", "2"))
+        
+        with ThreadPoolExecutor(max_workers=scan_parallelism) as executor:
             future_to_scanner = {
                 executor.submit(run_scanner, s, repo_path): s 
                 for s in scanners
@@ -170,7 +184,6 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
                     findings = future.result()
                     all_findings.extend(findings)
                 except Exception as e:
-                    print(f"Scanner {scanner.get_name()} failed: {e}")
                     _record_failure(e)
 
         # Store findings in database

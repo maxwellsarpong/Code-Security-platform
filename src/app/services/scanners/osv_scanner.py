@@ -18,7 +18,11 @@ class OSVScanner(BaseScanner):
         "Cargo.lock",
         "composer.lock",
         "gemfile.lock",
-        "mix.lock"
+        "mix.lock",
+        "pom.xml",
+        "build.gradle",
+        "build.gradle.kts",
+        "gradle.lockfile"
     ]
     
     def get_name(self) -> str:

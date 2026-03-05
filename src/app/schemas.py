@@ -145,3 +145,22 @@ class UserUsageResponse(BaseModel):
     scan_quota_limit: int
     resolve_quota_limit: int
     current_month_usage: int
+
+
+class AdminHealthStats(BaseModel):
+    system_health_percentage: float
+    total_scans: int
+    total_findings: int
+    total_fixed_findings: int
+    average_risk_score: float
+
+
+class EventRead(BaseModel):
+    id: UUID
+    user_id: UUID
+    event_type: str
+    amount: float
+    meta: Optional[dict] = None
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True, populate_by_name=True)

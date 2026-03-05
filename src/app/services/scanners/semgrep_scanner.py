@@ -82,6 +82,8 @@ class SemgrepScanner(BaseScanner):
                 "--config", "p/owasp-top-ten",
                 "--config", "p/javascript",
                 "--config", "p/typescript",
+                "--config", "p/java",
+                "--config", "p/spring",
                 "--json",  # JSON output
                 "--quiet",  # Suppress progress
                 "--exclude", "node_modules",
@@ -102,6 +104,14 @@ class SemgrepScanner(BaseScanner):
                 text=True,
                 timeout=600  # 10 minute timeout
             )
+            
+            # Better error reporting if Semgrep itself fails
+            if result.returncode != 0 and not result.stdout:
+                error_msg = result.stderr or "Unknown Semgrep error"
+                print(f"Semgrep execution error: {error_msg}")
+                # We don't raise an exception here to avoid breaking the entire scan pipeline
+                # but we log it for the user/worker
+                return results
             
             # Parse JSON output
             if result.stdout:

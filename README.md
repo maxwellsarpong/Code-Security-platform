@@ -145,6 +145,16 @@ curl -X POST http://localhost:8000/api/v1/auth/login \
      -H "Content-Type: application/json" \
      -d '{ "email": "user@example.com", "password": "yourpassword" }'
 # Response: { "access_token": "...", "token_type": "bearer" }
+
+# Request Password Recovery
+curl -X POST http://localhost:8000/api/v1/auth/request-password-recovery \
+     -H "Content-Type: application/json" \
+     -d '{ "email": "user@example.com" }'
+
+# Reset Password (using token from email/logs)
+curl -X POST http://localhost:8000/api/v1/auth/reset-password \
+     -H "Content-Type: application/json" \
+     -d '{ "token": "<JWT_TOKEN>", "new_password": "newsecurepassword" }'
 ```
 
 ---
@@ -189,6 +199,10 @@ curl -X POST http://localhost:8000/api/v1/user/subscription/team \
 |--------|----------|---------------|-------------|
 | `GET` | `/api/v1/admin/users` | ✅ (superuser) | List all registered users |
 | `PUT` | `/api/v1/admin/users/{user_id}` | ✅ (superuser) | Update a user's plan, quota, or `is_superuser` status |
+| `GET` | `/api/v1/admin/scans` | ✅ (superuser) | List all security scans on the platform |
+| `GET` | `/api/v1/admin/findings/fixed` | ✅ (superuser) | List all fixed vulnerabilities across the platform |
+| `GET` | `/api/v1/admin/health/stats` | ✅ (superuser) | Get system-wide health percentage and security stats |
+| `GET` | `/api/v1/admin/events` | ✅ (superuser) | List latest platform-wide events (scans, resolutions, etc.). Supports `offset` and `limit` (default 3). |
 
 ```bash
 # List users
@@ -200,6 +214,26 @@ curl -X PUT http://localhost:8000/api/v1/admin/users/<USER_ID> \
      -H "Authorization: Bearer <SUPERUSER_JWT>" \
      -H "Content-Type: application/json" \
      -d '{ "plan": "enterprise" }'
+
+# List all scans on platform
+curl http://localhost:8000/api/v1/admin/scans \
+     -H "Authorization: Bearer <SUPERUSER_JWT>"
+
+# List all fixed vulnerabilities on platform
+curl http://localhost:8000/api/v1/admin/findings/fixed \
+     -H "Authorization: Bearer <SUPERUSER_JWT>"
+
+# Get overall system health percentage
+curl http://localhost:8000/api/v1/admin/health/stats \
+     -H "Authorization: Bearer <SUPERUSER_JWT>"
+
+# Get latest platform events (paginated, shows 3 by default)
+curl http://localhost:8000/api/v1/admin/events \
+     -H "Authorization: Bearer <SUPERUSER_JWT>"
+
+# Get legacy events with custom offset/limit
+curl "http://localhost:8000/api/v1/admin/events?offset=3&limit=5" \
+     -H "Authorization: Bearer <SUPERUSER_JWT>"
 ```
 
 ---

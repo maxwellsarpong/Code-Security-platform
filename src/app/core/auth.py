@@ -19,9 +19,26 @@ def create_access_token(subject: Union[str, Any], expires_delta: timedelta = Non
         expire = datetime.utcnow() + expires_delta
     else:
         expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode = {"exp": expire, "sub": str(subject)}
+    to_encode = {"exp": expire, "sub": str(subject), "type": "access"}
     encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
     return encoded_jwt
+
+
+def create_password_reset_token(email: str) -> str:
+    expire = datetime.utcnow() + timedelta(minutes=30)  # 30-minute expiry
+    to_encode = {"exp": expire, "sub": email, "type": "reset"}
+    encoded_jwt = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    return encoded_jwt
+
+
+def verify_password_reset_token(token: str) -> str | None:
+    try:
+        decoded_token = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        if decoded_token.get("type") != "reset":
+            return None
+        return decoded_token.get("sub")
+    except jwt.JWTError:
+        return None
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:

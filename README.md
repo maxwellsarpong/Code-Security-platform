@@ -126,6 +126,8 @@ All protected endpoints accept either `Authorization: Bearer <JWT_TOKEN>` or `x-
 | `POST` | `/api/v1/auth/init-superuser` | Bootstraps the system by creating the first superuser. Returns `403` if a superuser already exists. |
 | `POST` | `/api/v1/auth/login` | JSON login — returns a JWT. Returns `404` if the email is not found, `401` for a wrong password |
 | `POST` | `/api/v1/auth/token` | OAuth2 form-data login — returns a JWT |
+| `POST` | `/api/v1/auth/request-password-recovery` | Send a password recovery email. Requires `email`. |
+| `POST` | `/api/v1/auth/reset-password` | Reset password. Requires a valid reset `token` and a `new_password`. |
 
 ```bash
 # Register

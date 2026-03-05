@@ -14,6 +14,15 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class PasswordRecoveryRequest(BaseModel):
+    email: str
+
+
+class PasswordResetRequest(BaseModel):
+    token: str
+    new_password: str
+
+
 class UserRead(BaseModel):
     id: UUID
     email: str

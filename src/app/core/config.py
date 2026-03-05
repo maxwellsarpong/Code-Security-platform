@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     jira_api_token: Optional[str] = None
     jira_project_key: Optional[str] = None
     
+    # SMTP configuration
+    smtp_server: Optional[str] = None
+    smtp_port: int = 587
+    smtp_username: Optional[str] = None
+    smtp_password: Optional[str] = None
+    smtp_from_email: str = "noreply@security-platform.com"
+    
     # GenAI configuration
     gemini_api_key: Optional[str] = None
 

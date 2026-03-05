@@ -2,10 +2,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from ..core.db import get_session
-from ..core.auth import get_password_hash, verify_password, create_access_token
+from ..core.auth import get_password_hash, verify_password, create_access_token, create_password_reset_token, verify_password_reset_token
+from ..services.email import send_password_reset_email
 from ..core.billing_plans import get_plan
 from ..models import User
-from ..schemas import UserCreate, UserRead, Token, LoginRequest
+from ..schemas import UserCreate, UserRead, Token, LoginRequest, PasswordRecoveryRequest, PasswordResetRequest
 
 router = APIRouter()
 
@@ -93,6 +94,63 @@ def login_json(
 ):
     """JSON-based login."""
     return _perform_login(login_in.email, login_in.password, session)
+
+
+@router.post("/request-password-recovery")
+def request_password_recovery(
+    request: PasswordRecoveryRequest,
+    session: Session = Depends(get_session)
+):
+    """
+    Send an email with a password recovery link.
+    Returns success even if the user is not found to prevent email enumeration.
+    """
+    # Use generic success message
+    success_response = {"detail": "If your email is registered, you will receive a password recovery link shortly."}
+    
+    statement = select(User).where(User.email == request.email)
+    user = session.exec(statement).first()
+    
+    if not user:
+        return success_response
+        
+    # Generate token and "send" email
+    token = create_password_reset_token(request.email)
+    send_password_reset_email(request.email, token)
+    
+    return success_response
+
+
+@router.post("/reset-password")
+def reset_password(
+    request: PasswordResetRequest,
+    session: Session = Depends(get_session)
+):
+    """
+    Reset password using a valid token.
+    """
+    email = verify_password_reset_token(request.token)
+    if not email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset token."
+        )
+        
+    statement = select(User).where(User.email == email)
+    user = session.exec(statement).first()
+    
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found."
+        )
+        
+    # Update the password
+    user.hashed_password = get_password_hash(request.new_password)
+    session.add(user)
+    session.commit()
+    
+    return {"detail": "Password has been successfully reset."}
 
 
 def _perform_login(email: str, password: str, session: Session) -> dict:

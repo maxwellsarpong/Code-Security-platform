@@ -12,7 +12,7 @@ class User(SQLModel, table=True):
     is_superuser: bool = Field(default=False)
     
     # Quota and Plan
-    plan: str = "free"
+    plan: str = "starter"
     rate_limit_per_minute: int = 10
     scan_quota_per_month: Optional[int] = 2
     resolve_quota_per_month: Optional[int] = 2

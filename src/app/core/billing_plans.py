@@ -9,7 +9,7 @@ Three tiers with separate monthly quotas for scans and vulnerability resolutions
 
 from typing import TypedDict
 
-VALID_PLANS = ("free", "team", "enterprise")
+VALID_PLANS = ("starter", "team", "enterprise")
 
 
 class PlanConfig(TypedDict):
@@ -18,7 +18,7 @@ class PlanConfig(TypedDict):
 
 
 PLANS: dict[str, PlanConfig] = {
-    "free": {
+    "starter": {
         "scan_quota": 2,
         "resolve_quota": 2,
     },
@@ -34,5 +34,5 @@ PLANS: dict[str, PlanConfig] = {
 
 
 def get_plan(plan_name: str) -> PlanConfig:
-    """Return the PlanConfig for *plan_name*, falling back to 'free' for unknown names."""
-    return PLANS.get(plan_name, PLANS["free"])
+    """Return the PlanConfig for *plan_name*, falling back to 'starter' for unknown names."""
+    return PLANS.get(plan_name, PLANS["starter"])

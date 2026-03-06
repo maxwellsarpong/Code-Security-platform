@@ -12,6 +12,7 @@ from ..services.scanner import enqueue_scan, get_scan_result
 from ..services.resolution import ResolutionService
 from ..services.billing import renew_subscription, subscribe_user_to_plan
 from .deps import get_user_from_api_key, get_user_no_quota, get_user_enforce_scan_quota, get_user_enforce_resolve_quota
+from ..core.rate_limiter import get_usage_count, increment_quota_usage
 import secrets
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
@@ -78,30 +79,26 @@ def get_user_usage(session: Session = Depends(get_session), user: User = Depends
     stmt = select(Usage).where(Usage.user_id == user.id).order_by(Usage.date.desc())
     rows = session.exec(stmt).all()
     
-    # Calculate current month's usage
-    today = date.today()
-    first_of_month = today.replace(day=1)
-    
-    monthly_stmt = select(Usage).where(Usage.user_id == user.id, Usage.date >= first_of_month)
-    monthly_rows = session.exec(monthly_stmt).all()
-
-    month_scans = sum(r.scans_count or 0 for r in monthly_rows)
-    month_resolves = sum(r.resolutions_count or 0 for r in monthly_rows)
-    month_usage = month_scans + month_resolves
+    # Fetch real-time usage from rate limiter (Redis/Memory)
+    real_scans = get_usage_count(str(user.id), "scan")
+    real_resolves = get_usage_count(str(user.id), "resolve")
+    real_total = real_scans + real_resolves
 
     plan_config = get_plan(user.plan)
     scan_quota = user.scan_quota_per_month if user.scan_quota_per_month is not None else plan_config["scan_quota"]
     resolve_quota = user.resolve_quota_per_month if user.resolve_quota_per_month is not None else plan_config["resolve_quota"]
     combined_quota = scan_quota + resolve_quota
 
-    percentage_left = max(0.0, ((combined_quota - month_usage) / combined_quota) * 100) if combined_quota > 0 else 0.0
+    percentage_left = max(0.0, ((combined_quota - real_total) / combined_quota) * 100) if combined_quota > 0 else 0.0
 
     return {
         "usage": rows,
         "percentage_credit_left": round(percentage_left, 2),
         "scan_quota_limit": scan_quota,
         "resolve_quota_limit": resolve_quota,
-        "current_month_usage": month_usage
+        "current_month_usage": real_total,
+        "scans_used": real_scans,
+        "resolutions_used": real_resolves
     }
 
 
@@ -116,6 +113,9 @@ def create_scan(payload: ScanCreate, user: User = Depends(get_user_enforce_scan_
     session.add(scan)
     session.commit()
     session.refresh(scan)
+
+    # Increment monthly scan quota ONLY after successful 201 creation
+    increment_quota_usage(str(user.id), "scan")
 
     response = ScanRead.model_validate(scan)
     enqueue_scan(scan.id, user_id=str(user.id))
@@ -205,6 +205,9 @@ def resolve_finding(
         if "severity" in response.message:
             raise HTTPException(status_code=400, detail=response.message)
         raise HTTPException(status_code=500, detail=response.message)
+    
+    # Increment monthly resolution quota ONLY after successful resolution
+    increment_quota_usage(str(user.id), "resolve")
     
     return response
 

@@ -1,7 +1,10 @@
 import logging
+# import smtplib
+# from email.mime.text import MIMEText
+# from email.mime.multipart import MIMEMultipart
 import smtplib
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import ssl
+from email.message import EmailMessage
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -25,9 +28,14 @@ def send_password_reset_email(email: str, token: str):
         return
 
     try:
-        msg = MIMEMultipart()
-        msg["From"] = settings.smtp_from_email
-        msg["To"] = email
+
+        sender = settings.smtp_from_email
+        password = settings.smtp_password
+        receiver = email
+
+        msg = EmailMessage()
+        msg["From"] = sender
+        msg["To"] = receiver
         msg["Subject"] = "Password Reset Request"
         
         body = f"You recently requested a password reset.\n\nClick the link below to reset your password:\n{reset_link}\n\nMakesure you don't share this link with anyone.\nIf you did not request this, please ignore this email."

@@ -145,6 +145,8 @@ class UserUsageResponse(BaseModel):
     scan_quota_limit: int
     resolve_quota_limit: int
     current_month_usage: int
+    scans_used: int
+    resolutions_used: int
 
 
 class AdminHealthStats(BaseModel):

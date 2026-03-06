@@ -120,6 +120,7 @@ def get_user_enforce_quota(
             rate=effective_rate,
             quota_per_month=scan_quota if is_scan else None,
             resolve_quota_per_month=resolve_quota if is_resolve else None,
+            peek_quota_only=True if (is_scan or is_resolve) else False,
         )
 
     # 1. Use logged-in user context (JWT)

@@ -57,6 +57,7 @@ def check_rate_limit(
     rate: int = 10,
     quota_per_month: Optional[int] = None,
     resolve_quota_per_month: Optional[int] = None,
+    peek_quota_only: bool = False,
 ):
     """Raises HTTPException(429) when rate limit or quota is exceeded.
 
@@ -64,6 +65,7 @@ def check_rate_limit(
     - rate: allowed requests per minute
     - quota_per_month: allowed scans per month (enforced on route='scans')
     - resolve_quota_per_month: allowed resolves per month (enforced on route='resolve')
+    - peek_quota_only: if True, monthly quotas are checked but not incremented.
     """
     # rate (per-minute)
     window = 60
@@ -83,11 +85,22 @@ def check_rate_limit(
         month = _now_month_key()
         quota_key = f"quota:scan:{user_id}:{month}"
         try:
-            qv = _incr_redis(quota_key, 60 * 60 * 24 * 31) if Redis is not None else None
+            if peek_quota_only:
+                conn = Redis.from_url(REDIS_URL, decode_responses=True) if Redis is not None else None
+                qv_raw = conn.get(quota_key) if conn else None
+                qv = int(qv_raw) if qv_raw else 0
+            else:
+                qv = _incr_redis(quota_key, 60 * 60 * 24 * 31) if Redis is not None else None
         except Exception:
             qv = None
+        
         if qv is None:
-            qv = _incr_memory(quota_key, 60 * 60 * 24 * 31)
+            if peek_quota_only:
+                bucket = _memory_counters.get(quota_key)
+                qv = bucket[0] if bucket else 0
+            else:
+                qv = _incr_memory(quota_key, 60 * 60 * 24 * 31)
+
         if qv > quota_per_month:
             raise HTTPException(status_code=403, detail="monthly scan quota exceeded — upgrade your plan to continue scanning")
 
@@ -96,11 +109,22 @@ def check_rate_limit(
         month = _now_month_key()
         quota_key = f"quota:resolve:{user_id}:{month}"
         try:
-            qv = _incr_redis(quota_key, 60 * 60 * 24 * 31) if Redis is not None else None
+            if peek_quota_only:
+                conn = Redis.from_url(REDIS_URL, decode_responses=True) if Redis is not None else None
+                qv_raw = conn.get(quota_key) if conn else None
+                qv = int(qv_raw) if qv_raw else 0
+            else:
+                qv = _incr_redis(quota_key, 60 * 60 * 24 * 31) if Redis is not None else None
         except Exception:
             qv = None
+
         if qv is None:
-            qv = _incr_memory(quota_key, 60 * 60 * 24 * 31)
+            if peek_quota_only:
+                bucket = _memory_counters.get(quota_key)
+                qv = bucket[0] if bucket else 0
+            else:
+                qv = _incr_memory(quota_key, 60 * 60 * 24 * 31)
+
         if qv > resolve_quota_per_month:
             raise HTTPException(status_code=403, detail="monthly resolve quota exceeded — upgrade your plan to continue resolving findings")
 
@@ -128,3 +152,40 @@ def reset_monthly_quota(user_id: str, quota_type: str = "scan"):
         del _memory_counters[quota_key]
 
     return True
+
+
+def increment_quota_usage(user_id: str, quota_type: str = "scan"):
+    """Manually increments the monthly scan or resolve quota for a user.
+    
+    Used when an operation is confirmed successful (e.g. Scan created).
+    """
+    month = _now_month_key()
+    quota_key = f"quota:{quota_type}:{user_id}:{month}"
+    window = 60 * 60 * 24 * 31
+
+    try:
+        _incr_redis(quota_key, window)
+    except Exception:
+        _incr_memory(quota_key, window)
+
+    return True
+def get_usage_count(user_id: str, quota_type: str = "scan") -> int:
+    """Returns the current monthly usage count for a user without incrementing it."""
+    month = _now_month_key()
+    quota_key = f"quota:{quota_type}:{user_id}:{month}"
+    
+    try:
+        conn = Redis.from_url(REDIS_URL, decode_responses=True) if Redis is not None else None
+        if conn:
+            val = conn.get(quota_key)
+            return int(val) if val else 0
+    except Exception:
+        pass
+        
+    bucket = _memory_counters.get(quota_key)
+    if bucket:
+        now = int(time.time())
+        if bucket[1] >= now:
+            return bucket[0]
+            
+    return 0

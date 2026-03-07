@@ -1,8 +1,9 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
-
-
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 class Settings(BaseSettings):
     project_name: str = "security-compliance-platform"
     # Use absolute path to avoid SQLite errors
@@ -46,8 +47,8 @@ class Settings(BaseSettings):
 
 # Initialize and debug
 settings = Settings()
-print(f"!!! CONFIG DEBUG !!! Project: {settings.project_name}")
+logger.debug(f"!!! CONFIG DEBUG !!! Project: {settings.project_name}")
 if settings.github_token or settings.gitlab_token or settings.bitbucket_token:
-    print(".....token present.....")
+    logger.debug(".....token present.....")
 else:
-    print(".....token not present.....")
+    logger.debug(".....token not present.....")

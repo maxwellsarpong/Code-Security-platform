@@ -1,10 +1,12 @@
 import requests
+import logging
 from requests.auth import HTTPBasicAuth
 from typing import Optional
 from ..core.config import Settings
 from ..models import User
 
 settings = Settings()
+logger = logging.getLogger(__name__)
 
 class JiraService:
     def __init__(self, user: Optional[User] = None, jira_url: Optional[str] = None):
@@ -26,7 +28,7 @@ class JiraService:
         Creates a new issue in Jira.
         """
         if not all([self.jira_url, self.email, self.api_token, self.project_key]):
-            print("WARNING: Jira issue creation skipped. Jira credentials not fully configured.")
+            logger.warning("Jira issue creation skipped. Jira credentials not fully configured.")
             return None
 
         url = f"{self.jira_url}/rest/api/3/issue"
@@ -65,20 +67,19 @@ class JiraService:
         }
 
         try:
-            print(f"DEBUG: Attempting to create Jira issue at {url}")
+            logger.debug(f"Attempting to create Jira issue at {url}")
             response = requests.post(url, json=payload, headers=headers, auth=auth)
             if response.status_code == 201:
                 issue_key = response.json().get("key")
-                print(f"Jira issue created successfully: {issue_key}")
+                logger.info(f"Jira issue created successfully: {issue_key}")
                 return issue_key
             else:
-                print(f"Failed to create Jira issue: Status {response.status_code}")
-                print(f"Response: {response.text}")
+                logger.error(f"Failed to create Jira issue: Status {response.status_code}")
+                logger.debug(f"Response: {response.text}")
                 return None
         except Exception as e:
-            print(f"ERROR: Exception while creating Jira issue: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Exception while creating Jira issue: {str(e)}")
+            logger.error("Traceback details:", exc_info=True)
             return None
 
     def create_vulnerability_task(self, finding_title: str, finding_description: str, pr_url: str):

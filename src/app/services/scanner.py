@@ -2,6 +2,7 @@ import time
 import random
 import datetime
 import os
+import logging
 import sentry_sdk
 import shutil
 from pathlib import Path
@@ -24,6 +25,7 @@ except Exception:  # pragma: no cover - optional in dev
 from prometheus_client import Counter, Histogram
 
 settings = Settings()
+logger = logging.getLogger(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 from ..core import db
 
@@ -131,7 +133,7 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
             clone_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
 
         try:
-            print(f"Cloning repository: {scan.repo_url}") # Log without token
+            logger.info(f"Cloning repository: {scan.repo_url}") # Log without token
             # Force HTTP/1.1 and larger buffer for stability on complex repos
             env = os.environ.copy()
             env["GIT_HTTP_LOW_SPEED_LIMIT"] = "0"
@@ -161,13 +163,13 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
         
         def run_scanner(scanner_instance, path):
             if scanner_instance.is_applicable(path):
-                print(f"[{scan_id}] Starting scanner: {scanner_instance.get_name()}")
+                logger.info(f"[{scan_id}] Starting scanner: {scanner_instance.get_name()}")
                 try:
                     results = scanner_instance.scan(path)
-                    print(f"[{scan_id}] Scanner {scanner_instance.get_name()} completed. Found {len(results)} issues.")
+                    logger.info(f"[{scan_id}] Scanner {scanner_instance.get_name()} completed. Found {len(results)} issues.")
                     return results
                 except Exception as e:
-                    print(f"[{scan_id}] Scanner {scanner_instance.get_name()} failed: {e}")
+                    logger.error(f"[{scan_id}] Scanner {scanner_instance.get_name()} failed: {e}")
                     raise
             return []
 
@@ -189,7 +191,7 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
                     _record_failure(e)
 
         # Store findings in database
-        print(f"Found {len(all_findings)} issues. Saving to database...")
+        logger.info(f"Found {len(all_findings)} issues. Saving to database...")
         for finding_result in all_findings:
             finding = Finding(
                 scan_id=scan.id,
@@ -217,7 +219,7 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
         session.flush()
         session.commit()
 
-        print(f"Scan {scan_id} completed successfully with risk score {risk_score}. Done.")
+        logger.info(f"Scan {scan_id} completed successfully with risk score {risk_score}. Done.")
 
         SCANS_COMPLETED.inc()
         duration = time.time() - start_time
@@ -247,7 +249,7 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
             try:
                 shutil.rmtree(repo_dir)
             except Exception as e:
-                print(f"Failed to clean up repo directory: {e}")
+                logger.warning(f"Failed to clean up repo directory: {e}")
 
 
 

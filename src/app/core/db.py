@@ -1,6 +1,9 @@
 from sqlmodel import create_engine, Session, SQLModel
 import os
+import logging
 from .config import Settings
+
+logger = logging.getLogger(__name__)
 
 settings = Settings()
 DATABASE_URL = os.getenv("DATABASE_URL", settings.database_url)
@@ -22,22 +25,22 @@ def init_db():
         # 1. Update 'finding' table
         finding_cols = [col['name'] for col in inspector.get_columns('finding')]
         if 'is_fixed' not in finding_cols:
-            print("Migration: Adding column 'is_fixed' to table 'finding'...")
+            logger.info("Migration: Adding column 'is_fixed' to table 'finding'...")
             conn.execute(text("ALTER TABLE finding ADD COLUMN is_fixed BOOLEAN DEFAULT FALSE"))
             conn.commit()
         if 'pr_url' not in finding_cols:
-            print("Migration: Adding column 'pr_url' to table 'finding'...")
+            logger.info("Migration: Adding column 'pr_url' to table 'finding'...")
             conn.execute(text("ALTER TABLE finding ADD COLUMN pr_url VARCHAR"))
             conn.commit()
         if 'user_id' not in finding_cols:
-            print("Migration: Adding column 'user_id' to table 'finding'...")
+            logger.info("Migration: Adding column 'user_id' to table 'finding'...")
             conn.execute(text("ALTER TABLE finding ADD COLUMN user_id VARCHAR"))
             conn.commit()
 
         # 2. Update 'scan' table
         scan_cols = [col['name'] for col in inspector.get_columns('scan')]
         if 'user_id' not in scan_cols:
-            print("Migration: Adding column 'user_id' to table 'scan'...")
+            logger.info("Migration: Adding column 'user_id' to table 'scan'...")
             conn.execute(text("ALTER TABLE scan ADD COLUMN user_id VARCHAR"))
             conn.commit()
 
@@ -60,6 +63,6 @@ def init_db():
                 else:
                     col_type = "VARCHAR"
 
-                print(f"Migration: Adding column '{col}' to table 'user'...")
+                logger.info(f"Migration: Adding column '{col}' to table 'user'...")
                 conn.execute(text(f"ALTER TABLE user ADD COLUMN {col} {col_type}"))
                 conn.commit()

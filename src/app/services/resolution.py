@@ -1,4 +1,5 @@
 import os
+import logging
 import time
 import requests
 import tempfile
@@ -20,16 +21,18 @@ from .jira_service import JiraService
 
 settings = Settings()
 
+logger = logging.getLogger(__name__)
+
 class ResolutionService:
     _lock = Lock() # To prevent concurrent writes to the same repo if needed, though each job has its own temp dir
 
     def __init__(self, session: Session):
         self.session = session
-        print("!!! RESOLUTION SERVICE VERSION 6.0 - MULTI-TENANT !!!")
+        logger.info("!!! RESOLUTION SERVICE VERSION 6.0 - MULTI-TENANT !!!")
 
     def resolve_finding(self, finding_id: UUID, github_token: Optional[str] = None, force_sync: bool = False) -> ResolutionResponse:
         search_id = str(finding_id).replace("-", "")
-        print(f"!!! RESOLUTION !!! Attempting to resolve ID: {finding_id} (normalized: {search_id})")
+        logger.info(f"!!! RESOLUTION !!! Attempting to resolve ID: {finding_id} (normalized: {search_id})")
         
         # 1. Try to find as a Finding
         # Fast direct lookup (may fail depending on DB driver/type handling)
@@ -42,7 +45,7 @@ class ResolutionService:
             finding = self.session.exec(stmt).first()
             
             if finding:
-                print(f"DEBUG: Found finding {finding.id} via targeted lookup.")
+                logger.debug(f"DEBUG: Found finding {finding.id} via targeted lookup.")
 
         if finding:
             if finding.is_fixed:
@@ -73,7 +76,7 @@ class ResolutionService:
              stmt = select(Scan).where(cast(Scan.id, String).in_([str(finding_id), search_id]))
              scan = self.session.exec(stmt).first()
              if scan:
-                 print(f"DEBUG: Found scan {scan.id} via targeted lookup.")
+                 logger.debug(f"DEBUG: Found scan {scan.id} via targeted lookup.")
         
         if scan:
             # Check for worker sync env var or fallback
@@ -85,7 +88,7 @@ class ResolutionService:
                 # Enqueue as background task
                 return enqueue_resolution(str(finding_id), github_token)
 
-        print(f"ID {finding_id} (normalized: {search_id}) not found as Finding or Scan.")
+        logger.warning(f"ID {finding_id} (normalized: {search_id}) not found as Finding or Scan.")
         return ResolutionResponse(
             status="failed",
             finding_id=finding_id,
@@ -100,7 +103,7 @@ class ResolutionService:
             return ResolutionResponse(status="failed", finding_id=scan.id, message="No findings to resolve.")
 
         # Token Resolution with ultra-transparency
-        print(f"[{scan.id}] --- TOKEN DISCOVERY START ---")
+        logger.debug(f"[{scan.id}] --- TOKEN DISCOVERY START ---")
         
         # Determine platform from repo_url
         platform = "github"
@@ -133,12 +136,12 @@ class ResolutionService:
             elif platform == "bitbucket":
                 raw_user = user.bitbucket_token
         
-        print(f"[{scan.id}] Platform: {platform}")
-        print(f"[{scan.id}] 1. Payload: {'Present' if raw_payload else 'None/Empty'} (Len: {len(raw_payload) if raw_payload else 0})")
-        print(f"[{scan.id}] 2. DB Scan: {'Present' if raw_db else 'None/Empty'} (Len: {len(raw_db) if raw_db else 0})")
-        print(f"[{scan.id}] 3. User: {'Present' if raw_user else 'None/Empty'} (Len: {len(raw_user) if raw_user else 0})")
-        print(f"[{scan.id}] 4. Settings ({platform}): {'Present' if raw_settings else 'None/Empty'} (Len: {len(raw_settings) if raw_settings else 0})")
-        print(f"[{scan.id}] 5. OS Env ({platform.upper()}_TOKEN): {'Present' if raw_env else 'None/Empty'} (Len: {len(raw_env) if raw_env else 0})")
+        logger.debug(f"[{scan.id}] Platform: {platform}")
+        logger.debug(f"[{scan.id}] 1. Payload: {'Present' if raw_payload else 'None/Empty'} (Len: {len(raw_payload) if raw_payload else 0})")
+        logger.debug(f"[{scan.id}] 2. DB Scan: {'Present' if raw_db else 'None/Empty'} (Len: {len(raw_db) if raw_db else 0})")
+        logger.debug(f"[{scan.id}] 3. User: {'Present' if raw_user else 'None/Empty'} (Len: {len(raw_user) if raw_user else 0})")
+        logger.debug(f"[{scan.id}] 4. Settings ({platform}): {'Present' if raw_settings else 'None/Empty'} (Len: {len(raw_settings) if raw_settings else 0})")
+        logger.debug(f"[{scan.id}] 5. OS Env ({platform.upper()}_TOKEN): {'Present' if raw_env else 'None/Empty'} (Len: {len(raw_env) if raw_env else 0})")
 
         token = None
         token_source = "None Found"
@@ -159,8 +162,8 @@ class ResolutionService:
             token = raw_env.strip()
             token_source = f"os.environ ({platform.upper()}_TOKEN)"
             
-        print(f"[{scan.id}] FINAL CHOICE: {token_source} (Len: {len(token) if token else 0})")
-        print(f"[{scan.id}] --- TOKEN DISCOVERY END ---")
+        logger.debug(f"[{scan.id}] FINAL CHOICE: {token_source} (Len: {len(token) if token else 0})")
+        logger.debug(f"[{scan.id}] --- TOKEN DISCOVERY END ---")
 
         repo_dir = tempfile.mkdtemp(prefix="resolve_scan_")
         
@@ -173,7 +176,7 @@ class ResolutionService:
                 # For Git commands, we need to ensure the token is in the netloc
                 clone_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
 
-            print(f"[{scan.id}] STATUS: IN_PROGRESS - Setting up repository cache: {scan.repo_url}")
+            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Setting up repository cache: {scan.repo_url}")
             # Use a persistent cache directory to avoid redundant clones
             cache_base = Path("/tmp/repos_cache")
             cache_base.mkdir(parents=True, exist_ok=True)
@@ -188,7 +191,7 @@ class ResolutionService:
             
             if repo_cache_path.exists() and (repo_cache_path / ".git").exists():
                 try:
-                    print(f"[{scan.id}] Using cached repository at {repo_cache_path}")
+                    logger.debug(f"[{scan.id}] Using cached repository at {repo_cache_path}")
                     repo = Repo(repo_cache_path)
                     # Successive runs: fetch latest and reset
                     origin = repo.remotes.origin
@@ -198,7 +201,7 @@ class ResolutionService:
                     shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
                     repo = Repo(repo_dir)
                 except Exception as cache_err:
-                    print(f"[{scan.id}] WARNING: Cache invalid ({cache_err}). Re-cloning.")
+                    logger.warning(f"[{scan.id}] WARNING: Cache invalid ({cache_err}). Re-cloning.")
                     if os.path.exists(repo_cache_path):
                         shutil.rmtree(repo_cache_path)
                     
@@ -207,10 +210,10 @@ class ResolutionService:
                         shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
                         repo = Repo(repo_dir)
                     except Exception as e2:
-                        print(f"[{scan.id}] WARNING: Failed to use cache during re-clone ({e2}). Cloning directly.")
+                        logger.warning(f"[{scan.id}] WARNING: Failed to use cache during re-clone ({e2}). Cloning directly.")
                         repo = Repo.clone_from(clone_url, repo_dir, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
             else:
-                print(f"[{scan.id}] Cache miss or invalid. Cloning repository to {repo_cache_path}")
+                logger.debug(f"[{scan.id}] Cache miss or invalid. Cloning repository to {repo_cache_path}")
                 if os.path.exists(repo_cache_path):
                     shutil.rmtree(repo_cache_path)
                 
@@ -219,17 +222,17 @@ class ResolutionService:
                     shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
                     repo = Repo(repo_dir)
                 except Exception as e:
-                    print(f"[{scan.id}] WARNING: Failed to populate cache ({e}). Cloning directly.")
+                    logger.warning(f"[{scan.id}] WARNING: Failed to populate cache ({e}). Cloning directly.")
                     repo = Repo.clone_from(clone_url, repo_dir, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
             
             # Detect default branch before switching
             default_branch = repo.active_branch.name
-            print(f"[{scan.id}] Detected default branch: {default_branch}")
+            logger.debug(f"[{scan.id}] Detected default branch: {default_branch}")
 
             branch_name = f"fix/scan-{str(scan.id)[:8]}-{int(time.time())}"
             new_branch = repo.create_head(branch_name)
             new_branch.checkout()
-            print(f"[{scan.id}] Checked out branch: {branch_name}")
+            logger.debug(f"[{scan.id}] Checked out branch: {branch_name}")
 
             # Optimization: Group findings by file to minimize I/O and allow parallel processing across files
             files_to_findings = {}
@@ -289,7 +292,7 @@ class ResolutionService:
                                     modified = True
                                     results.append(finding)
                             except Exception as e:
-                                print(f"[{scan.id}] ERROR in parallel file fix: {e}")
+                                logger.error(f"[{scan.id}] ERROR in parallel file fix: {e}")
                 
                 if modified:
                     with open(current_file_path, "w") as f:
@@ -313,10 +316,10 @@ class ResolutionService:
                             applied_findings.extend(file_results)
                             resolved_count += len(file_results)
                     except Exception as e:
-                        print(f"[{scan.id}] ERROR: Failed to process fixes for {file_path}: {e}")
+                        logger.error(f"[{scan.id}] ERROR: Failed to process fixes for {file_path}: {e}")
 
             if resolved_count == 0:
-                print(f"[{scan.id}] STATUS: FAILED - Initial resolution pass yielded zero fixes. Triggering batch-level AI fallback.")
+                logger.warning(f"[{scan.id}] STATUS: FAILED - Initial resolution pass yielded zero fixes. Triggering batch-level AI fallback.")
                 
                 # Batch-level fallback: Iterate through findings one more time with AI
                 for f in findings:
@@ -341,15 +344,15 @@ class ResolutionService:
                         resolved_count += 1
                 
                 if resolved_count == 0:
-                    print(f"[{scan.id}] STATUS: FAILED - Batch-level AI fallback also failed to generate any fixes.")
+                    logger.error(f"[{scan.id}] STATUS: FAILED - Batch-level AI fallback also failed to generate any fixes.")
                     return ResolutionResponse(status="failed", finding_id=scan.id, message="Could not generate fixes for any findings in this scan (even with AI fallback).")
                 else:
-                    print(f"[{scan.id}] STATUS: IN_PROGRESS - Batch-level AI successfully resolved {resolved_count} findings.")
+                    logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Batch-level AI successfully resolved {resolved_count} findings.")
 
-            print(f"[{scan.id}] STATUS: IN_PROGRESS - Resolved {resolved_count} findings. Preparing to commit and push.")
+            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Resolved {resolved_count} findings. Preparing to commit and push.")
 
             if not token:
-                print(f"[{scan.id}] FATAL: Ready to push but still have NO token. Token source was: {token_source}")
+                logger.critical(f"[{scan.id}] FATAL: Ready to push but still have NO token. Token source was: {token_source}")
                 return ResolutionResponse(status="failed", finding_id=scan.id, message="Authentication required for push. No GITHUB_TOKEN or scan.git_token found.")
 
             # Configure Git user for the worker
@@ -365,7 +368,7 @@ class ResolutionService:
             repo.index.commit(commit_msg)
             
             # Push
-            print(f"[{scan.id}] STATUS: IN_PROGRESS - Pushing {branch_name} to origin...")
+            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Pushing {branch_name} to origin...")
             origin = repo.remote(name='origin')
             
             # Ensure the origin URL has the token for push if not already present
@@ -374,13 +377,13 @@ class ResolutionService:
                 parsed = urlparse(origin.url)
                 auth_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
                 origin.set_url(auth_url)
-                print(f"[{scan.id}] DEBUG: Updated remote URL for authenticated push.")
+                logger.debug(f"[{scan.id}] DEBUG: Updated remote URL for authenticated push.")
 
             origin.push(branch_name)
-            print(f"[{scan.id}] STATUS: IN_PROGRESS - Pushed {branch_name} to origin successfully.")
+            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Pushed {branch_name} to origin successfully.")
 
             # Create PR representing the whole scan (passing all applied findings list)
-            print(f"[{scan.id}] STATUS: IN_PROGRESS - Attempting to create PR for {resolved_count} fixes on base branch {default_branch}...")
+            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Attempting to create PR for {resolved_count} fixes on base branch {default_branch}...")
             pr_url = self._create_pull_request(
                 scan.repo_url, 
                 branch_name, 
@@ -393,9 +396,9 @@ class ResolutionService:
             )
             
             if pr_url:
-                print(f"[{scan.id}] STATUS: IN_PROGRESS - Successfully created PR: {pr_url}")
+                logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Successfully created PR: {pr_url}")
             else:
-                print(f"[{scan.id}] ERROR: PR creation failed or returned None.")
+                logger.error(f"[{scan.id}] ERROR: PR creation failed or returned None.")
 
             # Mark all applied findings as fixed
             for f in applied_findings:
@@ -404,7 +407,7 @@ class ResolutionService:
                 self.session.add(f)
             self.session.commit()
 
-            print(f"[{scan.id}] STATUS: COMPLETED - {resolved_count} fixes applied. PR: {pr_url}")
+            logger.info(f"[{scan.id}] STATUS: COMPLETED - {resolved_count} fixes applied. PR: {pr_url}")
 
             # Record billing for resolution
             if pr_url:
@@ -412,7 +415,7 @@ class ResolutionService:
                     from .billing import record_usage
                     record_usage(user_id=scan.user_id, resolutions=1, session=self.session)
                 except Exception as e:
-                    print(f"[{scan.id}] Failed to record resolution usage: {e}")
+                    logger.error(f"[{scan.id}] Failed to record resolution usage: {e}")
 
 
             return ResolutionResponse(
@@ -423,9 +426,8 @@ class ResolutionService:
             )
 
         except Exception as e:
-            print(f"[{scan.id}] CRITICAL ERROR during bundled resolution: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.critical(f"[{scan.id}] CRITICAL ERROR during bundled resolution: {str(e)}")
+            logger.error("Detailed traceback for bundled resolution error:", exc_info=True)
             return ResolutionResponse(status="failed", finding_id=scan.id, message=f"Error during bundled resolution: {str(e)}")
         finally:
             if os.path.exists(repo_dir):
@@ -465,7 +467,7 @@ class ResolutionService:
             if "0.0.0.0" in content and ((finding.title and "bind" in finding.title.lower()) or (finding.description and "address" in finding.description.lower())):
                 fixed_content = content.replace("0.0.0.0", "127.0.0.1")
                 if fixed_content != content:
-                    print(f"[{finding.id}] Applying rule-based fix: Switched 0.0.0.0 to 127.0.0.1")
+                    logger.info(f"[{finding.id}] Applying rule-based fix: Switched 0.0.0.0 to 127.0.0.1")
                     return fixed_content
 
             # 3. Handle 'assert used' (common in Bandit) - We generally don't fix this automatically as it's often intended
@@ -481,7 +483,7 @@ class ResolutionService:
                         # Using a more robust regex that ignores case and handles potential attributes
                         fixed_content = re.sub(r'(<form[^>]*>)', r'\1\n    {% csrf_token %}', content, flags=re.IGNORECASE)
                         if fixed_content != content:
-                            print(f"[{finding.id}] Applying rule-based fix: Added CSRF token to Django form")
+                            logger.info(f"[{finding.id}] Applying rule-based fix: Added CSRF token to Django form")
                             return fixed_content
 
             # 5. Handle hardcoded password strings (Bandit B105) or Django Secret Key
@@ -495,7 +497,7 @@ class ResolutionService:
                  if fixed_content != content:
                      if "import os" not in fixed_content:
                          fixed_content = "import os\n" + fixed_content
-                     print(f"[{finding.id}] Applying rule-based fix: Replaced hardcoded secret with os.environ.get")
+                     logger.info(f"[{finding.id}] Applying rule-based fix: Replaced hardcoded secret with os.environ.get")
                      return fixed_content
 
             # 6. Handle unsafe JS Document methods (e.g. document.write)
@@ -504,7 +506,7 @@ class ResolutionService:
                     import re
                     fixed_content = re.sub(r'document\.write(ln)?\(', r'// [FIXED] replaced insecure write\n    console.log(', content)
                     if fixed_content != content:
-                        print(f"[{finding.id}] Applying rule-based fix: Replaced insecure document.write")
+                        logger.info(f"[{finding.id}] Applying rule-based fix: Replaced insecure document.write")
                         return fixed_content
 
             # 9. Handle Sha224 Hash (Bandit B303)
@@ -512,7 +514,7 @@ class ResolutionService:
                 if "hashlib.sha224(" in content:
                     fixed_content = content.replace("hashlib.sha224(", "hashlib.sha256(")
                     if fixed_content != content:
-                        print(f"[{finding.id}] Applying rule-based fix: Switched SHA224 to SHA256")
+                        logger.info(f"[{finding.id}] Applying rule-based fix: Switched SHA224 to SHA256")
                         return fixed_content
 
             # 10. Handle Weak SSL Version (Bandit B323)
@@ -523,7 +525,7 @@ class ResolutionService:
                     if ver in fixed_content:
                         fixed_content = fixed_content.replace(ver, "ssl.PROTOCOL_TLS_CLIENT")
                 if fixed_content != content:
-                    print(f"[{finding.id}] Applying rule-based fix: Upgraded weak SSL/TLS version to PROTOCOL_TLS_CLIENT")
+                    logger.info(f"[{finding.id}] Applying rule-based fix: Upgraded weak SSL/TLS version to PROTOCOL_TLS_CLIENT")
                     return fixed_content
 
             # 11. Handle Request Session With Http
@@ -531,7 +533,7 @@ class ResolutionService:
                 if "http://" in content:
                     fixed_content = content.replace("http://", "https://")
                     if fixed_content != content:
-                        print(f"[{finding.id}] Applying rule-based fix: Switched http:// to https://")
+                        logger.info(f"[{finding.id}] Applying rule-based fix: Switched http:// to https://")
                         return fixed_content
 
             # 12. Prototype Pollution Mitigation (Basic Comment)
@@ -539,7 +541,7 @@ class ResolutionService:
                 if "obj[" in content and "attr]" in content: # Generic pollution pattern
                      fixed_content = content.replace("obj[attr]", "if(attr !== '__proto__' && attr !== 'constructor') obj[attr]")
                      if fixed_content != content:
-                         print(f"[{finding.id}] Applying rule-based fix: Added basic prototype pollution check")
+                         logger.info(f"[{finding.id}] Applying rule-based fix: Added basic prototype pollution check")
                          return fixed_content
 
             # 13. Handle Non Literal Import
@@ -549,7 +551,7 @@ class ResolutionService:
                      # Add a safety comment before the line containing import_module
                      fixed_content = re.sub(r'(^.*import_module\(.*$)', r'# [SECURITY] Ensure input is validated\n\1', content, flags=re.MULTILINE)
                      if fixed_content != content:
-                         print(f"[{finding.id}] Applying rule-based fix: Added warning for non-literal import")
+                         logger.info(f"[{finding.id}] Applying rule-based fix: Added warning for non-literal import")
                          return fixed_content
 
             # 14. Handle Django Custom Expression As Sql / Extends Custom Expression
@@ -560,7 +562,7 @@ class ResolutionService:
                     fixed_content = re.sub(r'def as_sql\(self, compiler, connection\):', 
                                           'def as_sql(self, compiler, connection, **extra_context):', content)
                     if fixed_content != content:
-                        print(f"[{finding.id}] Applying rule-based fix: Suggested parameterization for Custom Expression")
+                        logger.info(f"[{finding.id}] Applying rule-based fix: Suggested parameterization for Custom Expression")
                         return fixed_content
 
             # 15. Handle try_except_pass (Bandit B110)
@@ -570,7 +572,7 @@ class ResolutionService:
                      # Replace empty pass with a safety comment or logging
                      fixed_content = re.sub(r'(except.*:)\s*\n\s+pass', r'\1 # [SECURITY] Do not suppress all errors\n            import logging; logging.error("Exception suppressed")', content)
                      if fixed_content != content:
-                         print(f"[{finding.id}] Applying rule-based fix: Replaced pass with logging in except block")
+                         logger.info(f"[{finding.id}] Applying rule-based fix: Replaced pass with logging in except block")
                          return fixed_content
                      return None
 
@@ -581,7 +583,7 @@ class ResolutionService:
                      # Add a default timeout of 10 seconds to requests calls
                      fixed_content = re.sub(r'(requests\.(get|post|put|delete|patch)\()', r'\1timeout=10, ', content)
                      if fixed_content != content:
-                         print(f"[{finding.id}] Applying rule-based fix: Added default timeout to requests call")
+                         logger.info(f"[{finding.id}] Applying rule-based fix: Added default timeout to requests call")
                          return fixed_content
 
             # 17. Handle hardcoded_sql_expressions / Sqlalchemy Execute Raw Query / CWE-89 / SQL Injection
@@ -599,7 +601,7 @@ class ResolutionService:
                              if re.search(r'\.execute\(.*?,[\s\n]*[({]', line):
                                  if "# nosec" not in line and "# [SECURITY]" not in line:
                                      lines[idx] = line.split('#')[0].rstrip() + " # nosec B608 - already parameterized"
-                                     print(f"[{finding.id}] Applying rule-based fix: Added nosec to line {finding.line_number} (CWE-89 FP)")
+                                     logger.info(f"[{finding.id}] Applying rule-based fix: Added nosec to line {finding.line_number} (CWE-89 FP)")
                                      return "\n".join(lines) + "\n"
                                  return None
 
@@ -613,17 +615,17 @@ class ResolutionService:
                                          new_content = "\n".join(lines) + "\n"
                                          if "from sqlalchemy import text" not in new_content:
                                              new_content = "from sqlalchemy import text\n" + new_content
-                                         print(f"[{finding.id}] Applying rule-based fix: Wrapped SQA execute in text() on line {finding.line_number}")
+                                         logger.info(f"[{finding.id}] Applying rule-based fix: Wrapped SQA execute in text() on line {finding.line_number}")
                                          return new_content
 
                              # 3. Fallback: Add security warning if not present
                              if "[SECURITY]" not in line and "# nosec" not in line:
                                  lines[idx] = line.rstrip() + " # [SECURITY] Use parameterized queries"
-                                 print(f"[{finding.id}] Applying rule-based fix: Added security warning (CWE-89) to line {finding.line_number}")
+                                 logger.info(f"[{finding.id}] Applying rule-based fix: Added security warning (CWE-89) to line {finding.line_number}")
                                  return "\n".join(lines) + "\n"
                              return None
 
-            print(f"[{finding.id}] No deterministic rule found for finding: {finding.title}")
+            logger.debug(f"[{finding.id}] No deterministic rule found for finding: {finding.title}")
         
         # Step 2: Gemini AI Fallback
         gemini_key = os.getenv("GEMINI_API_KEY", settings.gemini_api_key)
@@ -632,7 +634,7 @@ class ResolutionService:
             try:
                 from google import genai
                 mode_str = " (BATCH FORCE)" if force_ai else ""
-                print(f"[{finding.id}] DEBUG: Gemini API Key found. Attempting AI resolution for finding{mode_str}.")
+                logger.debug(f"[{finding.id}] DEBUG: Gemini API Key found. Attempting AI resolution for finding{mode_str}.")
                 if getattr(self, "_genai_client", None) is None:
                     self._genai_client = genai.Client(api_key=gemini_key)
                 client = self._genai_client
@@ -672,11 +674,11 @@ class ResolutionService:
                         fixed_code = "\n".join(lines[1:-1])
                         
                 if fixed_code and fixed_code != content:
-                    print(f"[{finding.id}] Gemini AI successfully generated a fix")
+                    logger.info(f"[{finding.id}] Gemini AI successfully generated a fix")
                     return fixed_code
                     
             except Exception as e:
-                print(f"[{finding.id}] ERROR in Gemini AI fallback: {e}")
+                logger.error(f"[{finding.id}] ERROR in Gemini AI fallback: {e}")
 
         return None
 
@@ -740,7 +742,7 @@ class ResolutionService:
             new_content.append(new_line)
 
         if modified:
-            print(f"Applying rule-based fix: Updated {package_name} to {target_version} in {finding.file_path}")
+            logger.info(f"Applying rule-based fix: Updated {package_name} to {target_version} in {finding.file_path}")
             return "\n".join(new_content) + "\n"
         
         return None
@@ -781,12 +783,12 @@ class ResolutionService:
         slack_service = SlackService(user=user)
         jira_service = JiraService(user=user)
         if not token:
-            print(f"ERROR: No token provided for PR creation.")
+            logger.error("ERROR: No token provided for PR creation.")
             return None
 
         platform, repo_id = self._get_platform_info(repo_url)
         if platform == "unknown":
-            print(f"Unknown platform for URL: {repo_url}")
+            logger.warning(f"Unknown platform for URL: {repo_url}")
             return None
 
         if not is_bundled and not isinstance(findings, list):
@@ -823,7 +825,7 @@ class ResolutionService:
                     "base": base_branch 
                 }
                 response = requests.post(f"https://api.github.com/repos/{repo_id}/pulls", json=data, headers=headers)
-                print(f"DEBUG: GitHub API PR Creation Request: URL=https://api.github.com/repos/{repo_id}/pulls, Status={response.status_code}")
+                logger.debug(f"DEBUG: GitHub API PR Creation Request: URL=https://api.github.com/repos/{repo_id}/pulls, Status={response.status_code}")
                 if response.status_code == 201:
                     pr_url = response.json().get("html_url")
                     if pr_url:
@@ -833,7 +835,7 @@ class ResolutionService:
                         jira_service.create_vulnerability_task(notify_title, body, pr_url)
                     return pr_url
                 else:
-                    print(f"DEBUG: GitHub API Response Error: {response.text}")
+                    logger.debug(f"DEBUG: GitHub API Response Error: {response.text}")
             
             elif platform == "gitlab":
                 headers = {"PRIVATE-TOKEN": token}
@@ -871,12 +873,11 @@ class ResolutionService:
                         jira_service.create_vulnerability_task(notify_title, body, pr_url)
                     return pr_url
 
-            print(f"Failed to create {platform} PR/MR: {response.status_code} {response.text}")
+            logger.error(f"Failed to create {platform} PR/MR: {response.status_code} {response.text}")
             return None
         except Exception as e:
-            print(f"ERROR: Exception while calling {platform} API: {str(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"ERROR: Exception while calling {platform} API: {str(e)}")
+            logger.error("Traceback details:", exc_info=True)
             return None
 
 
@@ -896,7 +897,7 @@ def enqueue_resolution(target_id: str, github_token: Optional[str] = None):
     """
     # Safety: Check if we are already inside a worker to prevent recursion
     if os.getenv("RQ_WORKER_ID"):
-        print("WARNING: Skipping enqueue inside worker context to prevent infinite recursion.")
+        logger.warning("WARNING: Skipping enqueue inside worker context to prevent infinite recursion.")
         from ..core.db import engine
         with Session(engine) as session:
             service = ResolutionService(session)
@@ -920,7 +921,7 @@ def enqueue_resolution(target_id: str, github_token: Optional[str] = None):
             message="Resolution task has been queued and is processing in the background."
         )
     except Exception as e:
-        print(f"Failed to enqueue resolution: {e}")
+        logger.error(f"Failed to enqueue resolution: {e}")
         # fallback sync
         from ..core.db import engine
         with Session(engine) as session:
@@ -934,8 +935,8 @@ def run_resolution(target_id: str, github_token: Optional[str] = None):
     session = Session(db.engine)
     try:
         service = ResolutionService(session)
-        print(f"DEBUG: Starting background resolution for {target_id}. Token present: {github_token is not None}")
+        logger.debug(f"DEBUG: Starting background resolution for {target_id}. Token present: {github_token is not None}")
         result = service.resolve_finding(UUID(target_id), github_token, force_sync=True)
-        print(f"DEBUG: Background resolution finished for {target_id}. Status: {result.status}, Message: {result.message}")
+        logger.debug(f"DEBUG: Background resolution finished for {target_id}. Status: {result.status}, Message: {result.message}")
     finally:
         session.close()

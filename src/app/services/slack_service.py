@@ -1,9 +1,11 @@
 import requests
+import logging
 from typing import Optional
 from ..core.config import Settings
 from ..models import User
 
 settings = Settings()
+logger = logging.getLogger(__name__)
 
 class SlackService:
     def __init__(self, webhook_url: Optional[str] = None, user: Optional[User] = None):
@@ -19,20 +21,20 @@ class SlackService:
         Sends a notification to Slack via a webhook URL.
         """
         if not self.webhook_url:
-            print("WARNING: Slack notification skipped. SLACK_WEBHOOK_URL not configured.")
+            logger.warning("Slack notification skipped. SLACK_WEBHOOK_URL not configured.")
             return False
 
         try:
             payload = {"text": message}
             response = requests.post(self.webhook_url, json=payload)
             if response.status_code == 200:
-                print("Slack notification sent successfully.")
+                logger.info("Slack notification sent successfully.")
                 return True
             else:
-                print(f"Failed to send Slack notification: {response.status_code} {response.text}")
+                logger.error(f"Failed to send Slack notification: {response.status_code} {response.text}")
                 return False
         except Exception as e:
-            print(f"ERROR: Exception while sending Slack notification: {str(e)}")
+            logger.error(f"Exception while sending Slack notification: {str(e)}")
             return False
 
     def notify_pr_created(self, pr_url: str, finding_title: str, severity: str):

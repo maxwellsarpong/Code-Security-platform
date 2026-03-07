@@ -16,11 +16,7 @@ def send_password_reset_email(email: str, token: str):
     reset_link = f"http://localhost:8000/reset-password?token={token}"
     
     # Log it for development/debugging
-    print(f"\n=====================================")
-    print(f" PASSWORD RESET REQUESTED")
-    print(f" To: {email}")
-    print(f" Reset Link: {reset_link}")
-    print(f"=====================================\n")
+    logger.debug(f"PASSWORD RESET REQUESTED - To: {email}, Link: {reset_link}")
     logger.info(f"Password reset link generated for {email}")
     
     if not settings.smtp_server:

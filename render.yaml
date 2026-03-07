@@ -1,0 +1,158 @@
+# render.yaml — Blueprint for deploying Security Compliance Platform on Render
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Services:
+#   1. api      — FastAPI web service (uvicorn)
+#   2. worker   — RQ background worker (scans + resolutions queues)
+#   3. db       — PostgreSQL 15 managed database
+#   4. redis    — Redis 7 key-value store (rate-limiting + job queue)
+
+databases:
+  - name: security-compliance-db
+    databaseName: scp
+    user: svc
+    plan: free              # Switch to "starter" or higher for production
+    ipAllowList: []         # Allow all — restrict in production
+
+services:
+
+  # ─────────────────────────────────────────────
+  # 1. API — FastAPI Web Service
+  # ─────────────────────────────────────────────
+  - type: web
+    name: security-compliance-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: starter           # "free" for testing, "starter" recommended
+    region: frankfurt       # Change to your preferred region (oregon, singapore, etc.)
+    healthCheckPath: /api/v1/metrics   # Render will poll this path to confirm health
+    autoDeploy: true
+
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: security-compliance-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: security-compliance-redis
+          property: connectionString
+
+      # ── Auth ──
+      - key: SECRET_KEY
+        generateValue: true   # Render auto-generates a secure random value
+      - key: ALGORITHM
+        value: HS256
+
+      # ── SMTP (Email) ──
+      - key: SMTP_SERVER
+        value: smtp.gmail.com
+      - key: SMTP_PORT
+        value: "587"
+      - key: SMTP_USERNAME
+        sync: false           # Set this manually in the Render dashboard
+      - key: SMTP_PASSWORD
+        sync: false           # Set this manually in the Render dashboard
+      - key: SMTP_FROM_EMAIL
+        sync: false           # Set this manually in the Render dashboard
+
+      # ── Integrations ──
+      - key: SLACK_WEBHOOK_URL
+        sync: false
+      - key: JIRA_URL
+        sync: false
+      - key: JIRA_EMAIL
+        sync: false
+      - key: JIRA_PROJECT_KEY
+        sync: false
+
+      # ── Scanner / Tokens ──
+      - key: SCAN_PARALLELISM
+        value: "2"
+      - key: GITHUB_TOKEN
+        sync: false           # Required for private repo scanning & PR creation
+      - key: GITLAB_TOKEN
+        sync: false
+      - key: BITBUCKET_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false           # Required for AI-powered vulnerability resolution
+      - key: SENTRY_DSN
+        sync: false           # Optional — leave blank to disable Sentry
+
+      # ── CORS ──
+      - key: FRONTEND_URL
+        value: https://code-security-platform-frontend-lan.vercel.app
+
+  # ─────────────────────────────────────────────
+  # 2. Worker — RQ Background Worker
+  # ─────────────────────────────────────────────
+  - type: worker
+    name: security-compliance-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Use the startup script — inline shell expansion of $REDIS_URL doesn't
+    # work reliably in Render's dockerCommand field.
+    dockerCommand: /app/worker-entrypoint.sh
+    plan: starter
+    region: frankfurt
+    autoDeploy: true
+
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: security-compliance-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: security-compliance-redis
+          property: connectionString
+
+      # ── Auth (worker needs these for JWT validation) ──
+      - key: SECRET_KEY
+        fromService:
+          type: web
+          name: security-compliance-api
+          envVarKey: SECRET_KEY
+      - key: ALGORITHM
+        value: HS256
+
+      # ── Scanner / AI ──
+      - key: SCAN_PARALLELISM
+        value: "2"
+      - key: PYTHONPATH
+        value: /app/src
+      - key: GITHUB_TOKEN
+        sync: false           # Set in Render dashboard for private repo cloning
+      - key: GITLAB_TOKEN
+        sync: false
+      - key: BITBUCKET_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false           # Required for AI-powered vulnerability resolution
+      - key: SENTRY_DSN
+        sync: false
+
+      # ── Integrations (worker needs these for Slack/Jira notifications) ──
+      - key: SLACK_WEBHOOK_URL
+        sync: false
+      - key: JIRA_URL
+        sync: false
+      - key: JIRA_EMAIL
+        sync: false
+      - key: JIRA_API_TOKEN
+        sync: false
+      - key: JIRA_PROJECT_KEY
+        sync: false
+
+  # ─────────────────────────────────────────────
+  # 3. Redis — Key-Value Store (Rate Limit + Queue)
+  # ─────────────────────────────────────────────
+  - type: redis
+    name: security-compliance-redis
+    plan: free              # Upgrade for persistence and higher memory in production
+    region: frankfurt
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []         # Allow all internal services

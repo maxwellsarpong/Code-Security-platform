@@ -26,18 +26,35 @@ _memory_counters = {}
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
 
+def _get_redis_conn(decode_responses: bool = False):
+    """Build a Redis connection that works for both plain `redis://` and
+    TLS-encrypted `rediss://` (e.g. Render managed Redis).
+    Returns None when the redis client library is not installed.
+    """
+    if Redis is None:
+        return None
+    url = REDIS_URL
+    kwargs = {"decode_responses": decode_responses}
+    if url.startswith("rediss://"):
+        kwargs["ssl_cert_reqs"] = None  # Render uses internal/self-signed certs
+    return Redis.from_url(url, **kwargs)
+
+
 def _now_month_key():
     return time.strftime("%Y-%m")
 
 
 def _incr_redis(key: str, window_seconds: int):
-    conn = Redis.from_url(REDIS_URL) if Redis is not None else None
+    conn = _get_redis_conn()
     if conn is None:
         return None
-    val = conn.incr(key)
-    if conn.ttl(key) == -1:
-        conn.expire(key, window_seconds)
-    return val
+    try:
+        val = conn.incr(key)
+        if conn.ttl(key) == -1:
+            conn.expire(key, window_seconds)
+        return val
+    except Exception:
+        return None
 
 
 def _incr_memory(key: str, window_seconds: int):
@@ -86,7 +103,7 @@ def check_rate_limit(
         quota_key = f"quota:scan:{user_id}:{month}"
         try:
             if peek_quota_only:
-                conn = Redis.from_url(REDIS_URL, decode_responses=True) if Redis is not None else None
+                conn = _get_redis_conn(decode_responses=True)
                 qv_raw = conn.get(quota_key) if conn else None
                 qv = int(qv_raw) if qv_raw else 0
             else:
@@ -111,7 +128,7 @@ def check_rate_limit(
         quota_key = f"quota:resolve:{user_id}:{month}"
         try:
             if peek_quota_only:
-                conn = Redis.from_url(REDIS_URL, decode_responses=True) if Redis is not None else None
+                conn = _get_redis_conn(decode_responses=True)
                 qv_raw = conn.get(quota_key) if conn else None
                 qv = int(qv_raw) if qv_raw else 0
             else:
@@ -143,7 +160,7 @@ def reset_monthly_quota(user_id: str, quota_type: str = "scan"):
 
     # Reset in Redis
     try:
-        conn = Redis.from_url(REDIS_URL) if Redis is not None else None
+        conn = _get_redis_conn()
         if conn:
             conn.delete(quota_key)
     except Exception:
@@ -177,7 +194,7 @@ def get_usage_count(user_id: str, quota_type: str = "scan") -> int:
     quota_key = f"quota:{quota_type}:{user_id}:{month}"
     
     try:
-        conn = Redis.from_url(REDIS_URL, decode_responses=True) if Redis is not None else None
+        conn = _get_redis_conn(decode_responses=True)
         if conn:
             val = conn.get(quota_key)
             return int(val) if val else 0

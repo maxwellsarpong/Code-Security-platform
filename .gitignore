@@ -18,4 +18,6 @@ verify_fix.py
 verify_billing.py
 dump_schema.py
 verify*
-
+fly.toml
+.dockerignore
+.github/workflows/fly-deploy.yml

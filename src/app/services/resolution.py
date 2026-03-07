@@ -892,6 +892,16 @@ except ImportError:
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 
+
+def _get_redis_conn(decode_responses: bool = False):
+    """Build a Redis connection that supports both `redis://` and TLS `rediss://` (Render managed Redis)."""
+    if Redis is None:
+        return None
+    kwargs = {"decode_responses": decode_responses}
+    if REDIS_URL.startswith("rediss://"):
+        kwargs["ssl_cert_reqs"] = None
+    return Redis.from_url(REDIS_URL, **kwargs)
+
 def enqueue_resolution(target_id: str, github_token: Optional[str] = None):
     """Enqueue a resolution job to Redis/RQ when available.
     """
@@ -911,7 +921,7 @@ def enqueue_resolution(target_id: str, github_token: Optional[str] = None):
             return service.resolve_finding(UUID(target_id), github_token, force_sync=True)
 
     try:
-        conn = Redis.from_url(REDIS_URL, decode_responses=False)
+        conn = _get_redis_conn(decode_responses=False)
         q = Queue(name="resolutions", connection=conn)
         retry_policy = Retry(max=2, interval=[10, 30]) if Retry is not None else None
         q.enqueue("app.services.resolution.run_resolution", target_id, github_token, retry=retry_policy, job_timeout=3600)

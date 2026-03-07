@@ -29,6 +29,17 @@ logger = logging.getLogger(__name__)
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 from ..core import db
 
+
+def _get_redis_conn(decode_responses: bool = False):
+    """Build a Redis connection that supports both `redis://` and TLS `rediss://` (Render managed Redis)."""
+    if Redis is None:
+        return None
+    kwargs = {"decode_responses": decode_responses}
+    if REDIS_URL.startswith("rediss://"):
+        kwargs["ssl_cert_reqs"] = None
+    return Redis.from_url(REDIS_URL, **kwargs)
+
+
 # metrics
 SCANS_ENQUEUED = Counter("scp_scans_enqueued_total", "Total scans enqueued")
 SCANS_STARTED = Counter("scp_scans_started_total", "Total scans started")
@@ -50,7 +61,7 @@ def enqueue_scan(scan_id, user_id: Optional[str] = None):
         return schedule_scan(scan_id, user_id=user_id)
 
     try:
-        conn = Redis.from_url(REDIS_URL, decode_responses=True)
+        conn = _get_redis_conn(decode_responses=True)
         q = Queue(name="scans", connection=conn)
         # enqueue the function by import path so worker can import it
         retry_policy = Retry(max=3, interval=[10, 30, 60]) if Retry is not None else None

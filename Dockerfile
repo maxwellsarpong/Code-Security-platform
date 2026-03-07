@@ -20,6 +20,10 @@ RUN python -m pip install --upgrade pip "setuptools<70"
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/
+
+#to be deleted on local run
+COPY worker-entrypoint.sh ./worker-entrypoint.sh
+RUN chmod +x ./worker-entrypoint.sh
 ENV PYTHONPATH=/app/src
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,9 +1,12 @@
 """Checkov scanner for Infrastructure as Code security scanning."""
 import json
 import subprocess
+import logging
 from pathlib import Path
 from typing import List
 from .base import BaseScanner, ScannerResult
+
+logger = logging.getLogger(__name__)
 
 
 class CheckovScanner(BaseScanner):
@@ -86,7 +89,7 @@ class CheckovScanner(BaseScanner):
                 elif isinstance(data, dict):
                     all_failed_checks = data.get("results", {}).get("failed_checks", [])
                 
-                print(f"Checkov found {len(all_failed_checks)} issues.")
+                logger.info(f"Checkov found {len(all_failed_checks)} issues.")
                 
                 for check_type in all_failed_checks:
                     # Extract file path relative to repo

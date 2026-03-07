@@ -13,7 +13,7 @@ def send_password_reset_email(email: str, token: str):
     """
     Sends a password reset email using the configured SMTP server.
     """
-    reset_link = f"http://localhost:8000/reset-password?token={token}"
+    reset_link = f"https://code-security-platform-frontend-lan.vercel.app/reset-password?token={token}"
     
     # Log it for development/debugging
     logger.debug(f"PASSWORD RESET REQUESTED - To: {email}, Link: {reset_link}")

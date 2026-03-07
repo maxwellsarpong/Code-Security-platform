@@ -17,8 +17,8 @@ def test_registration_and_login(client: TestClient):
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["email"] == "test@example.com"
-    assert "id" in data
+    assert data["user"]["email"] == "test@example.com"
+    assert "id" in data["user"]
 
     # 2. Login
     response = client.post(

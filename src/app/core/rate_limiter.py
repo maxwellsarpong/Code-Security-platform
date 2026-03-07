@@ -101,7 +101,8 @@ def check_rate_limit(
             else:
                 qv = _incr_memory(quota_key, 60 * 60 * 24 * 31)
 
-        if qv > quota_per_month:
+        limit_exceeded = qv >= quota_per_month if peek_quota_only else qv > quota_per_month
+        if limit_exceeded:
             raise HTTPException(status_code=403, detail="monthly scan quota exceeded — upgrade your plan to continue scanning")
 
     # monthly resolve quota check
@@ -125,7 +126,8 @@ def check_rate_limit(
             else:
                 qv = _incr_memory(quota_key, 60 * 60 * 24 * 31)
 
-        if qv > resolve_quota_per_month:
+        limit_exceeded = qv >= resolve_quota_per_month if peek_quota_only else qv > resolve_quota_per_month
+        if limit_exceeded:
             raise HTTPException(status_code=403, detail="monthly resolve quota exceeded — upgrade your plan to continue resolving findings")
 
     return True

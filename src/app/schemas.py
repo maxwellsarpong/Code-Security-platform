@@ -82,6 +82,12 @@ class TokenData(BaseModel):
     email: Optional[str] = None
 
 
+class UserRegisterResponse(BaseModel):
+    access_token: str
+    token_type: str
+    user: UserRead
+
+
 class ScanCreate(BaseModel):
     repo_url: HttpUrl
     git_token: Optional[str] = None

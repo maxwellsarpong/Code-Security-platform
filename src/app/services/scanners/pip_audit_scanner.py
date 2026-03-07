@@ -1,9 +1,12 @@
 """pip-audit scanner for Python dependency vulnerability detection."""
 import json
 import subprocess
+import logging
 from pathlib import Path
 from typing import List
 from .base import BaseScanner, ScannerResult
+
+logger = logging.getLogger(__name__)
 
 
 class PipAuditScanner(BaseScanner):
@@ -78,7 +81,7 @@ class PipAuditScanner(BaseScanner):
             if result.stdout:
                 data = json.loads(result.stdout)
                 found_count = sum(len(d.get("vulns", [])) for d in data.get("dependencies", []))
-                print(f"pip-audit found {found_count} vulnerabilities.")
+                logger.info(f"pip-audit found {found_count} vulnerabilities.")
                 
                 # Process each vulnerability
                 for vuln in data.get("dependencies", []):

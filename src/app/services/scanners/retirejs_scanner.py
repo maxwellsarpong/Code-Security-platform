@@ -1,9 +1,12 @@
 """Retire.js scanner for bundled JavaScript vulnerability detection."""
 import json
 import subprocess
+import logging
 from pathlib import Path
 from typing import List
 from .base import BaseScanner, ScannerResult
+
+logger = logging.getLogger(__name__)
 
 
 class RetirejsScanner(BaseScanner):
@@ -97,7 +100,7 @@ class RetirejsScanner(BaseScanner):
             # Format depends on retire version: sometimes it's direct array, sometimes {"version":..., "data": [...]}
             findings_array = data if isinstance(data, list) else data.get("data", [])
             
-            print(f"Retire.js found issues in {len(findings_array)} files.")
+            logger.info(f"Retire.js found issues in {len(findings_array)} files.")
             
             for file_entry in findings_array:
                 file_path = file_entry.get("file", "")

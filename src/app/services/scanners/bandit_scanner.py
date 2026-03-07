@@ -1,9 +1,12 @@
 """Bandit scanner for Python static security analysis."""
 import json
 import subprocess
+import logging
 from pathlib import Path
 from typing import List
 from .base import BaseScanner, ScannerResult
+
+logger = logging.getLogger(__name__)
 
 
 class BanditScanner(BaseScanner):
@@ -64,7 +67,7 @@ class BanditScanner(BaseScanner):
             if result.stdout:
                 data = json.loads(result.stdout)
                 found_count = len(data.get("results", []))
-                print(f"Bandit found {found_count} issues.")
+                logger.info(f"Bandit found {found_count} issues.")
                 
                 # Process each finding
                 for issue in data.get("results", []):

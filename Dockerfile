@@ -16,7 +16,7 @@ RUN git config --global http.version HTTP/1.1 \
     && git config --global http.postBuffer 524288000
 
 COPY requirements.txt ./
-RUN python -m pip install --upgrade pip setuptools
+RUN python -m pip install --upgrade pip "setuptools<70"
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src/ ./src/

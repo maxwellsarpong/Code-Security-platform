@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.encoders import jsonable_encoder
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from ..core.db import get_session
@@ -6,12 +7,12 @@ from ..core.auth import get_password_hash, verify_password, create_access_token,
 from ..services.email import send_password_reset_email
 from ..core.billing_plans import get_plan
 from ..models import User
-from ..schemas import UserCreate, UserRead, Token, LoginRequest, PasswordRecoveryRequest, PasswordResetRequest
+from ..schemas import UserCreate, UserRead, Token, LoginRequest, PasswordRecoveryRequest, PasswordResetRequest, UserRegisterResponse
 
 router = APIRouter()
 
 
-@router.post("/register", response_model=UserRead)
+@router.post("/register", response_model=UserRegisterResponse)
 def register(user_in: UserCreate, session: Session = Depends(get_session)):
     # Check if user exists
     statement = select(User).where(User.email == user_in.email)
@@ -22,21 +23,28 @@ def register(user_in: UserCreate, session: Session = Depends(get_session)):
             detail="User with this email already exists",
         )
     
-    
     # Create User
-    plan_config = get_plan("free")
+    plan_config = get_plan("starter")
     hashed_password = get_password_hash(user_in.password)
     user = User(
         email=user_in.email,
         hashed_password=hashed_password,
-        plan="free",
+        plan="starter",
         scan_quota_per_month=plan_config["scan_quota"],
         resolve_quota_per_month=plan_config["resolve_quota"],
     )
     session.add(user)
     session.commit()
     session.refresh(user)
-    return user
+    
+    # Generate token immediately so frontend can login
+    access_token = create_access_token(subject=user.email)
+    
+    return UserRegisterResponse(
+        access_token=access_token,
+        token_type="bearer",
+        user=user
+    )
 
 
 @router.post("/init-superuser", response_model=UserRead)

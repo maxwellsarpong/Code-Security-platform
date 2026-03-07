@@ -1,9 +1,12 @@
 """npm-audit scanner for Node.js dependency vulnerability detection."""
 import json
 import subprocess
+import logging
 from pathlib import Path
 from typing import List
 from .base import BaseScanner, ScannerResult
+
+logger = logging.getLogger(__name__)
 
 
 class NpmAuditScanner(BaseScanner):
@@ -103,7 +106,7 @@ class NpmAuditScanner(BaseScanner):
                 else:
                     results = self._parse_v1_format(data, repo_path)
                     
-                print(f"npm-audit found {len(results)} vulnerabilities.")
+                logger.info(f"npm-audit found {len(results)} vulnerabilities.")
                 
         except subprocess.TimeoutExpired:
             raise Exception(f"npm audit scan timed out after 300 seconds")

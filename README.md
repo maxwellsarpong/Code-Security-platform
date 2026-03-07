@@ -58,7 +58,7 @@ uvicorn app.main:app --reload
 
 ```bash
 docker compose up --build
-# API -> http://localhost:8000
+# API -> https://security-compliance-platform.fly.dev
 ```
 
 ### Authentication
@@ -69,12 +69,12 @@ The platform supports **JWT Authentication** (via login) and **API Key Authentic
 
 ```bash
 # Register
-curl -X POST http://localhost:8000/api/v1/auth/register \
+curl -X POST https://security-compliance-platform.fly.dev/api/v1/auth/register \
      -H "Content-Type: application/json" \
      -d '{ "email": "user@example.com", "password": "yourpassword" }'
 
 # Login
-curl -X POST http://localhost:8000/api/v1/auth/login \
+curl -X POST https://security-compliance-platform.fly.dev/api/v1/auth/login \
      -H "Content-Type: application/json" \
      -d '{ "email": "user@example.com", "password": "yourpassword" }'
 # Response: { "access_token": "...", "token_type": "bearer" }
@@ -87,7 +87,7 @@ Use the `access_token` in the `Authorization: Bearer <token>` header for all sub
 Generate an API key after logging in (`POST /api/v1/user/api-key`), then use it via the `x-api-key` header:
 
 ```bash
-curl http://localhost:8000/api/v1/scans \
+curl https://security-compliance-platform.fly.dev/api/v1/scans \
      -H "x-api-key: <YOUR_API_KEY>"
 ```
 
@@ -131,28 +131,28 @@ All protected endpoints accept either `Authorization: Bearer <JWT_TOKEN>` or `x-
 
 ```bash
 # Register
-curl -X POST http://localhost:8000/api/v1/auth/register \
+curl -X POST https://security-compliance-platform.fly.dev/api/v1/auth/register \
      -H "Content-Type: application/json" \
      -d '{ "email": "user@example.com", "password": "yourpassword" }'
 
 # Create Initial Superuser (Run only once to bootstrap)
-curl -X POST http://localhost:8000/api/v1/auth/init-superuser \
+curl -X POST https://security-compliance-platform.fly.dev/api/v1/auth/init-superuser \
      -H "Content-Type: application/json" \
      -d '{ "email": "admin@example.com", "password": "secureadminpassword" }'
 
 # Login (JSON)
-curl -X POST http://localhost:8000/api/v1/auth/login \
+curl -X POST https://security-compliance-platform.fly.dev/api/v1/auth/login \
      -H "Content-Type: application/json" \
      -d '{ "email": "user@example.com", "password": "yourpassword" }'
 # Response: { "access_token": "...", "token_type": "bearer" }
 
 # Request Password Recovery
-curl -X POST http://localhost:8000/api/v1/auth/request-password-recovery \
+curl -X POST https://security-compliance-platform.fly.dev/api/v1/auth/request-password-recovery \
      -H "Content-Type: application/json" \
      -d '{ "email": "user@example.com" }'
 
 # Reset Password (using token from email/logs)
-curl -X POST http://localhost:8000/api/v1/auth/reset-password \
+curl -X POST https://security-compliance-platform.fly.dev/api/v1/auth/reset-password \
      -H "Content-Type: application/json" \
      -d '{ "token": "<JWT_TOKEN>", "new_password": "newsecurepassword" }'
 ```
@@ -173,21 +173,21 @@ curl -X POST http://localhost:8000/api/v1/auth/reset-password \
 
 ```bash
 # Update user profile
-curl -X PUT http://localhost:8000/api/v1/user/profile \
+curl -X PUT https://security-compliance-platform.fly.dev/api/v1/user/profile \
      -H "Authorization: Bearer <JWT_TOKEN>" \
      -H "Content-Type: application/json" \
      -d '{ "slack_webhook_url": "https://hooks.slack.com/services/...", "github_token": "ghp_..." }'
 
 # Get usage
-curl http://localhost:8000/api/v1/user/usage \
+curl https://security-compliance-platform.fly.dev/api/v1/user/usage \
      -H "Authorization: Bearer <JWT_TOKEN>"
 
 # Renew quota
-curl -X POST "http://localhost:8000/api/v1/user/subscription/renew?amount=100.0" \
+curl -X POST "https://security-compliance-platform.fly.dev/api/v1/user/subscription/renew?amount=100.0" \
      -H "Authorization: Bearer <JWT_TOKEN>"
 
 # Upgrade to Team Plan
-curl -X POST http://localhost:8000/api/v1/user/subscription/team \
+curl -X POST https://security-compliance-platform.fly.dev/api/v1/user/subscription/team \
      -H "Authorization: Bearer <JWT_TOKEN>"
 ```
 
@@ -206,33 +206,33 @@ curl -X POST http://localhost:8000/api/v1/user/subscription/team \
 
 ```bash
 # List users
-curl http://localhost:8000/api/v1/admin/users \
+curl https://security-compliance-platform.fly.dev/api/v1/admin/users \
      -H "Authorization: Bearer <SUPERUSER_JWT>"
 
 # Promote user to enterprise
-curl -X PUT http://localhost:8000/api/v1/admin/users/<USER_ID> \
+curl -X PUT https://security-compliance-platform.fly.dev/api/v1/admin/users/<USER_ID> \
      -H "Authorization: Bearer <SUPERUSER_JWT>" \
      -H "Content-Type: application/json" \
      -d '{ "plan": "enterprise" }'
 
 # List all scans on platform
-curl http://localhost:8000/api/v1/admin/scans \
+curl https://security-compliance-platform.fly.dev/api/v1/admin/scans \
      -H "Authorization: Bearer <SUPERUSER_JWT>"
 
 # List all fixed vulnerabilities on platform
-curl http://localhost:8000/api/v1/admin/findings/fixed \
+curl https://security-compliance-platform.fly.dev/api/v1/admin/findings/fixed \
      -H "Authorization: Bearer <SUPERUSER_JWT>"
 
 # Get overall system health percentage
-curl http://localhost:8000/api/v1/admin/health/stats \
+curl https://security-compliance-platform.fly.dev/api/v1/admin/health/stats \
      -H "Authorization: Bearer <SUPERUSER_JWT>"
 
 # Get latest platform events (paginated, shows 3 by default)
-curl http://localhost:8000/api/v1/admin/events \
+curl https://security-compliance-platform.fly.dev/api/v1/admin/events \
      -H "Authorization: Bearer <SUPERUSER_JWT>"
 
 # Get legacy events with custom offset/limit
-curl "http://localhost:8000/api/v1/admin/events?offset=3&limit=5" \
+curl "https://security-compliance-platform.fly.dev/api/v1/admin/events?offset=3&limit=5" \
      -H "Authorization: Bearer <SUPERUSER_JWT>"
 ```
 
@@ -249,7 +249,7 @@ curl "http://localhost:8000/api/v1/admin/events?offset=3&limit=5" \
 
 ```bash
 # Start a scan
-curl -X POST http://localhost:8000/api/v1/scans \
+curl -X POST https://security-compliance-platform.fly.dev/api/v1/scans \
      -H "Authorization: Bearer <JWT_TOKEN>" \
      -H "Content-Type: application/json" \
      -d '{ "repo_url": "https://github.com/owner/repo" }'
@@ -268,7 +268,7 @@ Pass a **Finding ID** to fix one vulnerability or a **Scan ID** to fix all findi
 Add `?force_sync=true` to wait for the result synchronously.
 
 ```bash
-curl -X POST "http://localhost:8000/api/v1/findings/<ID>/resolve?force_sync=true" \
+curl -X POST "https://security-compliance-platform.fly.dev/api/v1/findings/<ID>/resolve?force_sync=true" \
      -H "Authorization: Bearer <JWT_TOKEN>" \
      -H "Content-Type: application/json" \
      -d '{ "github_token": "your_personal_access_token" }'
@@ -298,7 +298,7 @@ REDIS_URL=redis://localhost:6379 python -m app.worker
 - With Docker Compose (recommended):
 ```bash
 docker compose up --build
-# api -> http://localhost:8000
+# api -> https://security-compliance-platform.fly.dev
 # worker logs are visible in the `worker` service
 ```
 
@@ -312,7 +312,7 @@ Example (local):
 ```bash
 # run everything with docker-compose
 SENTRY_DSN="" docker compose up --build
-# scrape metrics from http://localhost:8000/metrics and http://localhost:9100/
+# scrape metrics from https://security-compliance-platform.fly.dev/metrics and http://localhost:9100/
 ```
 
 ## CI / running without Redis

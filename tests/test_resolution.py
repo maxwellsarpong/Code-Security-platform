@@ -9,7 +9,7 @@ def test_resolve_finding_endpoint(client, session):
     email = f"user_{uuid4()}@example.com"
     response = client.post("/api/v1/auth/register", json={"email": email, "password": "pwd"})
     assert response.status_code == 200
-    user_id = UUID(response.json()["id"])
+    user_id = UUID(response.json()["user"]["id"])
     
     token_resp = client.post("/api/v1/auth/token", data={"username": email, "password": "pwd"})
     token = token_resp.json()["access_token"]

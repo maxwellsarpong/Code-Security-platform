@@ -1,9 +1,12 @@
 """Semgrep scanner for multi-language security analysis."""
 import json
 import subprocess
+import logging
 from pathlib import Path
 from typing import List
 from .base import BaseScanner, ScannerResult
+
+logger = logging.getLogger(__name__)
 
 
 class SemgrepScanner(BaseScanner):
@@ -108,7 +111,7 @@ class SemgrepScanner(BaseScanner):
             # Better error reporting if Semgrep itself fails
             if result.returncode != 0 and not result.stdout:
                 error_msg = result.stderr or "Unknown Semgrep error"
-                print(f"Semgrep execution error: {error_msg}")
+                logger.error(f"Semgrep execution error: {error_msg}")
                 # We don't raise an exception here to avoid breaking the entire scan pipeline
                 # but we log it for the user/worker
                 return results
@@ -117,7 +120,7 @@ class SemgrepScanner(BaseScanner):
             if result.stdout:
                 data = json.loads(result.stdout)
                 found_count = len(data.get("results", []))
-                print(f"Semgrep found {found_count} issues.")
+                logger.info(f"Semgrep found {found_count} issues.")
                 
                 # Process each finding
                 for finding in data.get("results", []):

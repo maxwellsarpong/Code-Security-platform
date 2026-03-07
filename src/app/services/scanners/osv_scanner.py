@@ -1,9 +1,12 @@
 """OSV-Scanner for multi-language dependency vulnerability detection."""
 import json
 import subprocess
+import logging
 from pathlib import Path
 from typing import List
 from .base import BaseScanner, ScannerResult
+
+logger = logging.getLogger(__name__)
 
 
 class OSVScanner(BaseScanner):
@@ -66,7 +69,7 @@ class OSVScanner(BaseScanner):
 
             data = json.loads(result.stdout)
             found_count = sum(len(p.get("vulnerabilities", [])) for r in data.get("results", []) for p in r.get("packages", []))
-            print(f"OSV-Scanner found {found_count} vulnerabilities.")
+            logger.info(f"OSV-Scanner found {found_count} vulnerabilities.")
             
             # OSV output structure can be complex, iterating through results
             for res in data.get("results", []):
@@ -117,6 +120,6 @@ class OSVScanner(BaseScanner):
             raise Exception("osv-scanner timed out")
         except Exception as e:
             # If osv-scanner is not installed or fails, we report it
-            print(f"osv-scanner execution error: {e}")
+            logger.error(f"osv-scanner execution error: {e}")
             
         return results

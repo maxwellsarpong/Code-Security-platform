@@ -417,6 +417,23 @@ class ResolutionService:
                 except Exception as e:
                     logger.error(f"[{scan.id}] Failed to record resolution usage: {e}")
 
+            # Email user the PR link (and Jira link if configured)
+            if pr_url and user and getattr(user, "email", None):
+                try:
+                    from .email import send_resolution_email
+                    highest_severity = applied_findings[0].severity if applied_findings else ""
+                    # Jira URL is on the user object if they configured it
+                    jira_base = getattr(user, "jira_url", None)
+                    send_resolution_email(
+                        email=user.email,
+                        repo_url=scan.repo_url,
+                        pr_url=pr_url,
+                        jira_url=jira_base,
+                        resolved_count=resolved_count,
+                        severity=highest_severity,
+                    )
+                except Exception as e:
+                    logger.error(f"[{scan.id}] Failed to send resolution notification email: {e}")
 
             return ResolutionResponse(
                 status="success",

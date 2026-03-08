@@ -1,7 +1,5 @@
 import logging
-# import smtplib
-# from email.mime.text import MIMEText
-# from email.mime.multipart import MIMEMultipart
+from typing import Optional
 import smtplib
 import ssl
 from email.message import EmailMessage
@@ -49,3 +47,62 @@ def send_password_reset_email(email: str, token: str):
         
     except Exception as e:
         logger.error(f"Failed to send password reset email to {email}: {str(e)}")
+
+
+def send_resolution_email(
+    email: str,
+    repo_url: str,
+    pr_url: str,
+    jira_url: Optional[str] = None,
+    resolved_count: int = 0,
+    severity: str = "",
+):
+    """
+    Sends an email notification to the user after a vulnerability resolution PR has been created.
+    Includes the PR URL and optionally a Jira task URL.
+    """
+    logger.info(f"Sending resolution email to {email} for PR: {pr_url}")
+
+    if not settings.smtp_server:
+        logger.warning("SMTP server not configured. Resolution email not sent.")
+        return
+
+    try:
+        msg = EmailMessage()
+        msg["From"] = settings.smtp_from_email
+        msg["To"] = email
+        msg["Subject"] = f"✅ Vulnerability Fixes Ready for Review — PR Created"
+
+        jira_line = f"\nJira Task:        {jira_url}" if jira_url else ""
+        body = f"""\
+Hello,
+
+Your vulnerability scan resolution is complete. A Pull Request has been created with the automated fixes.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Repository:       {repo_url}
+  Fixes Applied:    {resolved_count} vulnerabilities resolved
+  Highest Severity: {severity.upper() if severity else "N/A"}
+  Pull Request:     {pr_url}{jira_line}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Please review the PR before merging to ensure the fixes are correct.
+
+If you did not initiate this resolution, please contact your administrator.
+
+— Security Compliance Platform
+"""
+        msg.set_content(body)
+
+        with smtplib.SMTP(settings.smtp_server, settings.smtp_port) as server:
+            server.ehlo()
+            server.starttls(context=ssl.create_default_context())
+            if settings.smtp_username and settings.smtp_password:
+                server.login(settings.smtp_username, settings.smtp_password)
+            server.send_message(msg)
+
+        logger.info(f"Resolution email sent successfully to {email}")
+
+    except Exception as e:
+        logger.error(f"Failed to send resolution email to {email}: {str(e)}")
+

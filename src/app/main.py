@@ -19,9 +19,46 @@ if SENTRY_DSN:
 
 from contextlib import asynccontextmanager
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # ── Database ──
     init_db()
+
+    # ── Redis connectivity probe (logged on every startup) ──
+    redis_url = os.getenv("REDIS_URL", "")
+    if not redis_url:
+        logger.warning(
+            "[startup] REDIS_URL is NOT SET — scanning queue will be disabled. "
+            "Set REDIS_URL in the Render dashboard to enable background workers."
+        )
+    else:
+        # Redact password for logging
+        safe_url = redis_url
+        if "@" in redis_url:
+            parts = redis_url.rsplit("@", 1)
+            scheme = parts[0].split("://")[0]
+            safe_url = f"{scheme}://***@{parts[1]}"
+        logger.info(f"[startup] REDIS_URL = {safe_url}")
+        try:
+            from redis import Redis as _Redis
+            _conn = _Redis.from_url(
+                redis_url,
+                socket_connect_timeout=3,
+                socket_timeout=3,
+                **({"ssl_cert_reqs": None} if redis_url.startswith("rediss://") else {})
+            )
+            _conn.ping()
+            logger.info("[startup] Redis ping OK — queue is reachable.")
+            _conn.close()
+        except Exception as exc:
+            logger.error(
+                f"[startup] Redis ping FAILED ({safe_url}): {exc}. "
+                "Workers will NOT receive scan jobs until this is resolved."
+            )
     yield
 
 app = FastAPI(

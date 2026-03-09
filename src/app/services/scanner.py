@@ -68,7 +68,15 @@ def enqueue_scan(scan_id, user_id: Optional[str] = None):
         logger.info(f"[enqueue_scan] WORKER_SYNC mode — running scan {scan_id} synchronously.")
         return schedule_scan(scan_id, user_id=user_id)
 
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    redis_url = os.getenv("REDIS_URL", "")
+    if not redis_url:
+        logger.error(
+            f"[enqueue_scan] REDIS_URL is not set! Cannot enqueue scan {scan_id}. "
+            "Set REDIS_URL in the Render dashboard (Environment > Add Environment Variable) "
+            "to the internal connection string of your Redis service."
+        )
+        raise RuntimeError("REDIS_URL environment variable is not configured.")
+
     # Redact any password for safe logging
     safe_url = redis_url
     if "@" in redis_url:

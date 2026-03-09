@@ -26,18 +26,20 @@ from prometheus_client import Counter, Histogram
 
 settings = Settings()
 logger = logging.getLogger(__name__)
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 from ..core import db
 
 
 def _get_redis_conn(decode_responses: bool = False):
-    """Build a Redis connection that supports both `redis://` and TLS `rediss://` (Render managed Redis)."""
+    """Build a Redis connection that supports both `redis://` and TLS `rediss://` (Render managed Redis).
+    REDIS_URL is read lazily every call so environment is always current.
+    """
     if Redis is None:
         return None
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     kwargs = {"decode_responses": decode_responses}
-    if REDIS_URL.startswith("rediss://"):
-        kwargs["ssl_cert_reqs"] = None
-    return Redis.from_url(REDIS_URL, **kwargs)
+    if redis_url.startswith("rediss://"):
+        kwargs["ssl_cert_reqs"] = None  # Render uses internal/self-signed certs
+    return Redis.from_url(redis_url, **kwargs)
 
 
 # metrics
@@ -52,24 +54,52 @@ _scan_index: Dict[str, Dict[str, Any]] = {}
 
 
 def enqueue_scan(scan_id, user_id: Optional[str] = None):
-    """Enqueue a scan job to Redis/RQ when available.
-    Falls back to synchronous execution when WORKER_SYNC=true or Redis isn't available (useful for local/dev/CI).
+    """Enqueue a scan job to Redis/RQ.
+
+    - In WORKER_SYNC=true mode (local/CI), runs synchronously in-process.
+    - In production (Render), enqueues to the 'scans' Redis queue so the
+      dedicated worker container picks it up.  Any failure is logged and
+      re-raised — there is NO silent sync fallback so failures are always
+      visible in Render logs.
     """
     SCANS_ENQUEUED.inc()
     worker_sync = os.getenv("WORKER_SYNC", "false").lower() in ("1", "true", "yes")
     if worker_sync or Redis is None or Queue is None:
+        logger.info(f"[enqueue_scan] WORKER_SYNC mode — running scan {scan_id} synchronously.")
         return schedule_scan(scan_id, user_id=user_id)
+
+    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
+    # Redact any password for safe logging
+    safe_url = redis_url
+    if "@" in redis_url:
+        parts = redis_url.rsplit("@", 1)
+        safe_url = f"{parts[0].split('://')[0]}://***@{parts[1]}"
+    logger.info(f"[enqueue_scan] Connecting to Redis at {safe_url} to enqueue scan {scan_id}")
 
     try:
         conn = _get_redis_conn(decode_responses=True)
+        # Verify connectivity before queuing
+        conn.ping()
         q = Queue(name="scans", connection=conn)
-        # enqueue the function by import path so worker can import it
         retry_policy = Retry(max=3, interval=[10, 30, 60]) if Retry is not None else None
-        q.enqueue("app.services.scanner.schedule_scan", scan_id, user_id, retry=retry_policy, job_timeout=1200)
+        job = q.enqueue(
+            "app.services.scanner.schedule_scan",
+            scan_id,
+            user_id,
+            retry=retry_policy,
+            job_timeout=1200,
+        )
+        logger.info(
+            f"[enqueue_scan] Scan {scan_id} successfully enqueued. "
+            f"Job ID: {job.id}  Queue: {q.name}  Jobs waiting: {len(q)}"
+        )
         return True
-    except Exception:
-        # if enqueue fails, run sync as a best-effort fallback
-        return schedule_scan(scan_id, user_id=user_id)
+    except Exception as exc:
+        logger.error(
+            f"[enqueue_scan] FAILED to enqueue scan {scan_id} to Redis ({safe_url}): {exc}",
+            exc_info=True,
+        )
+        raise
 
 
 def _record_failure(exc):

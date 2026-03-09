@@ -118,22 +118,7 @@ def create_scan(payload: ScanCreate, user: User = Depends(get_user_enforce_scan_
     increment_quota_usage(str(user.id), "scan")
 
     response = ScanRead.model_validate(scan)
-
-    try:
-        enqueue_scan(scan.id, user_id=str(user.id))
-    except Exception as exc:
-        # Mark the scan as failed so it doesn't sit as QUEUED forever
-        scan.status = "failed"
-        session.add(scan)
-        session.commit()
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                f"Scan created but could not be dispatched to the worker queue: {exc}. "
-                "Check that REDIS_URL is set correctly in your Render environment variables."
-            )
-        )
-
+    enqueue_scan(scan.id, user_id=str(user.id))
     return response
 
 

@@ -1,15 +1,21 @@
-"""Convenience entrypoint to run an RQ worker locally or in production.
+"""Database-polling worker for the Security Compliance Platform.
 
-Usage (from project root):
-    REDIS_URL=redis://localhost:6379 python -m app.worker
+Instead of Redis/RQ, this worker polls the PostgreSQL/SQLite database
+every few seconds for scans in 'queued' status and dispatches them to
+the scanner. This removes the Redis dependency from the scan dispatch path entirely.
+
+Usage:
+    PYTHONPATH=/app/src python -m app.worker
 """
 
 import os
 import sys
-import logging
 import time
+import logging
+import signal
+import threading
 
-# Setup basic logging to stdout immediately (before any imports that might fail)
+# Setup logging immediately
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -17,89 +23,108 @@ logging.basicConfig(
 )
 logger = logging.getLogger("app.worker")
 
+# ── Graceful shutdown ────────────────────────────────────────────────
+_shutdown = threading.Event()
 
-def _redact_url(url: str) -> str:
-    """Redact password/token from Redis URL for safe logging."""
-    if "@" in url:
-        prefix = url.rsplit("@", 1)[0]
-        suffix = url.rsplit("@", 1)[1]
-        scheme = prefix.split("://")[0]
-        return f"{scheme}://***@{suffix}"
-    return url
+def _handle_signal(sig, frame):
+    logger.info(f"Received signal {sig} — shutting down gracefully...")
+    _shutdown.set()
 
-
-def _build_redis_conn(redis_url: str):
-    """Build a Redis connection supporting plain redis:// and TLS rediss://."""
-    from redis import Redis
-    kwargs = {}
-    if redis_url.startswith("rediss://"):
-        logger.info("TLS detected (rediss://) — disabling cert verification for Render internal Redis.")
-        kwargs["ssl_cert_reqs"] = None
-    return Redis.from_url(redis_url, **kwargs)
+signal.signal(signal.SIGTERM, _handle_signal)
+signal.signal(signal.SIGINT, _handle_signal)
 
 
-def _wait_for_redis(redis_url: str, retries: int = 10, delay: int = 3):
-    """Attempt to connect to Redis with retries. Dies after all retries exhausted."""
-    safe_url = _redact_url(redis_url)
-    for attempt in range(1, retries + 1):
+def _poll_and_dispatch():
+    """
+    Main polling loop. Queries the database for 'queued' scans and dispatches
+    them to `schedule_scan`. Runs until `_shutdown` is set.
+    """
+    from sqlmodel import Session, select
+    from .models import Scan
+    from .core.db import engine
+    from .services.scanner import schedule_scan
+
+    poll_interval = int(os.getenv("WORKER_POLL_INTERVAL", "5"))  # seconds
+    logger.info(f"Worker polling every {poll_interval}s for queued scans...")
+
+    while not _shutdown.is_set():
         try:
-            conn = _build_redis_conn(redis_url)
-            conn.ping()
-            logger.info(f"[attempt {attempt}/{retries}] Redis connected at {safe_url}")
-            return conn
+            with Session(engine) as session:
+                # Fetch all queued scans (oldest first)
+                queued = session.exec(
+                    select(Scan)
+                    .where(Scan.status == "queued")
+                    .order_by(Scan.created_at.asc())
+                ).all()
+
+                if queued:
+                    logger.info(f"Found {len(queued)} queued scan(s). Dispatching...")
+
+                for scan in queued:
+                    if _shutdown.is_set():
+                        break
+
+                    # Atomically claim the scan by setting status to 'running'
+                    # This prevents duplicate processing if multiple workers run
+                    scan.status = "running"
+                    session.add(scan)
+                    session.commit()
+                    logger.info(f"Claimed scan {scan.id} (repo: {scan.repo_url}). Starting scanner...")
+
+                    try:
+                        schedule_scan(scan.id, user_id=str(scan.user_id))
+                    except Exception as exc:
+                        logger.error(f"Scanner failed for scan {scan.id}: {exc}", exc_info=True)
+                        # schedule_scan already handles setting status to 'failed' internally
+                        # but guard here just in case
+                        try:
+                            with Session(engine) as err_session:
+                                err_scan = err_session.get(Scan, scan.id)
+                                if err_scan and err_scan.status not in ("completed", "failed"):
+                                    err_scan.status = "failed"
+                                    err_session.add(err_scan)
+                                    err_session.commit()
+                        except Exception:
+                            pass
+
         except Exception as exc:
-            logger.warning(
-                f"[attempt {attempt}/{retries}] Redis not ready at {safe_url}: {exc}"
-            )
-            if attempt < retries:
-                logger.info(f"Retrying in {delay}s...")
-                time.sleep(delay)
-    logger.error(f"CRITICAL: Could not connect to Redis after {retries} attempts. Exiting.")
-    sys.exit(1)
+            logger.error(f"Worker poll cycle error: {exc}", exc_info=True)
+
+        _shutdown.wait(timeout=poll_interval)
+
+    logger.info("Worker shut down cleanly.")
 
 
 if __name__ == "__main__":
-    from redis import Redis
-    from rq import Worker, Queue, Connection
     import sentry_sdk
-    from prometheus_client import start_http_server
 
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     sentry_dsn = os.getenv("SENTRY_DSN", "")
-    metrics_port = int(os.getenv("WORKER_METRICS_PORT", "9100"))
+    database_url = os.getenv("DATABASE_URL", "")
 
     logger.info("=" * 60)
-    logger.info("Security Compliance Platform Worker — Starting Up")
+    logger.info("Security Compliance Platform Worker — DB Polling Mode")
     logger.info("=" * 60)
-    logger.info(f"Target Redis  : {_redact_url(redis_url)}")
-    logger.info(f"DATABASE_URL  : {'SET' if os.getenv('DATABASE_URL') else 'NOT SET (will use default)'}")
-    logger.info(f"PYTHONPATH    : {os.getenv('PYTHONPATH', '(not set)')}")
-    logger.info(f"WORKER_SYNC   : {os.getenv('WORKER_SYNC', 'false')}")
+    logger.info(f"DATABASE_URL : {'SET (' + database_url[:30] + '...)' if database_url else 'NOT SET — using default SQLite'}")
+    logger.info(f"PYTHONPATH   : {os.getenv('PYTHONPATH', '(not set)')}")
+    logger.info(f"Poll interval: {os.getenv('WORKER_POLL_INTERVAL', '5')}s")
 
-    # Validate critical env
-    if not os.getenv("REDIS_URL"):
-        logger.error("REDIS_URL is not set! Worker cannot proceed without a Redis URL.")
-        sys.exit(1)
+    if not database_url:
+        logger.warning(
+            "DATABASE_URL is not set! Worker will use the local SQLite file. "
+            "On Render, make sure DATABASE_URL is set in the service Environment tab."
+        )
 
-    # init Sentry for the worker process
     if sentry_dsn:
         logger.info("Initializing Sentry...")
         sentry_sdk.init(dsn=sentry_dsn, traces_sample_rate=0.1)
 
-    # Start prometheus metrics HTTP server for the worker
+    # Optionally start Prometheus metrics server
     try:
-        logger.info(f"Starting metrics server on port {metrics_port}...")
+        from prometheus_client import start_http_server
+        metrics_port = int(os.getenv("WORKER_METRICS_PORT", "9100"))
         start_http_server(metrics_port)
+        logger.info(f"Metrics server on :{metrics_port}")
     except Exception as e:
         logger.warning(f"Could not start metrics server: {e}")
 
-    # Wait for Redis to be ready (handles cold-start race on Render)
-    conn = _wait_for_redis(redis_url, retries=10, delay=3)
-
-    queues = ["scans", "resolutions"]
-    logger.info(f"Listening on queues: {queues}")
-    logger.info("Worker ready. Waiting for jobs...")
-
-    with Connection(conn):
-        worker = Worker(queues, name=f"scp-worker-{os.uname().nodename}")
-        worker.work(with_scheduler=False)
+    _poll_and_dispatch()

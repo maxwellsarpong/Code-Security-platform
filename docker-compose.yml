@@ -18,7 +18,7 @@ services:
 
   worker:
     build: .
-    command: rq worker scans resolutions -u redis://redis:6379
+    command: python -m app.worker
     depends_on:
       - redis
       - api
@@ -28,6 +28,7 @@ services:
       - WORKER_METRICS_PORT=9100
       - SENTRY_DSN=
       - SCAN_PARALLELISM=2
+      - PYTHONPATH=/app/src
     deploy:
       resources:
         limits:

@@ -133,3 +133,37 @@ def list_platform_events(
     stmt = select(BillingEvent).order_by(BillingEvent.created_at.desc()).offset(offset).limit(limit)
     events = session.exec(stmt).all()
     return events
+
+
+@router.post("/scans/requeue")
+def requeue_stuck_scans(
+    session: Session = Depends(get_session),
+    superuser: User = Depends(get_current_superuser)
+):
+    """
+    Re-enqueue all scans that are stuck in 'queued' status.
+    Use this after fixing a Redis connectivity issue to rescue scans
+    that were never dispatched to the worker.
+    Accessible only to superusers.
+    """
+    from ..services.scanner import enqueue_scan
+
+    stuck_scans = session.exec(select(Scan).where(Scan.status == "queued")).all()
+
+    requeued = []
+    failed = []
+
+    for scan in stuck_scans:
+        try:
+            enqueue_scan(scan.id, user_id=str(scan.user_id))
+            requeued.append(str(scan.id))
+        except Exception as exc:
+            failed.append({"scan_id": str(scan.id), "error": str(exc)})
+
+    return {
+        "requeued_count": len(requeued),
+        "failed_count": len(failed),
+        "requeued": requeued,
+        "failed": failed,
+    }
+

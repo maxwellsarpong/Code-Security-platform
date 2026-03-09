@@ -54,28 +54,60 @@ _scan_index: Dict[str, Dict[str, Any]] = {}
 
 
 def enqueue_scan(scan_id, user_id: Optional[str] = None):
-    """Signal that a scan is ready to be processed.
+    """Enqueue a scan job to Redis/RQ.
 
-    The scan record is already saved in the database with status='queued'.
-    The dedicated DB-polling worker (worker.py) picks it up automatically
-    on its next poll cycle (every WORKER_POLL_INTERVAL seconds).
-
-    In WORKER_SYNC=true mode (local/CI), run synchronously in-process.
+    - In WORKER_SYNC=true mode (local/CI), runs synchronously in-process.
+    - In production (Render), enqueues to the 'scans' Redis queue so the
+      dedicated worker container picks it up.  Any failure is logged and
+      re-raised — there is NO silent sync fallback so failures are always
+      visible in Render logs.
     """
     SCANS_ENQUEUED.inc()
     worker_sync = os.getenv("WORKER_SYNC", "false").lower() in ("1", "true", "yes")
-
-    if worker_sync:
+    if worker_sync or Redis is None or Queue is None:
         logger.info(f"[enqueue_scan] WORKER_SYNC mode — running scan {scan_id} synchronously.")
         return schedule_scan(scan_id, user_id=user_id)
 
-    # In production: the scan is already in the DB as 'queued'.
-    # The DB-polling worker will pick it up — nothing else needed here.
-    logger.info(
-        f"[enqueue_scan] Scan {scan_id} is queued in the database. "
-        "The DB-polling worker will pick it up on its next poll cycle."
-    )
-    return True
+    redis_url = os.getenv("REDIS_URL", "")
+    if not redis_url:
+        logger.error(
+            f"[enqueue_scan] REDIS_URL is not set! Cannot enqueue scan {scan_id}. "
+            "Set REDIS_URL in the Render dashboard (Environment > Add Environment Variable) "
+            "to the internal connection string of your Redis service."
+        )
+        raise RuntimeError("REDIS_URL environment variable is not configured.")
+
+    # Redact any password for safe logging
+    safe_url = redis_url
+    if "@" in redis_url:
+        parts = redis_url.rsplit("@", 1)
+        safe_url = f"{parts[0].split('://')[0]}://***@{parts[1]}"
+    logger.info(f"[enqueue_scan] Connecting to Redis at {safe_url} to enqueue scan {scan_id}")
+
+    try:
+        conn = _get_redis_conn(decode_responses=True)
+        # Verify connectivity before queuing
+        conn.ping()
+        q = Queue(name="scans", connection=conn)
+        retry_policy = Retry(max=3, interval=[10, 30, 60]) if Retry is not None else None
+        job = q.enqueue(
+            "app.services.scanner.schedule_scan",
+            scan_id,
+            user_id,
+            retry=retry_policy,
+            job_timeout=1200,
+        )
+        logger.info(
+            f"[enqueue_scan] Scan {scan_id} successfully enqueued. "
+            f"Job ID: {job.id}  Queue: {q.name}  Jobs waiting: {len(q)}"
+        )
+        return True
+    except Exception as exc:
+        logger.error(
+            f"[enqueue_scan] FAILED to enqueue scan {scan_id} to Redis ({safe_url}): {exc}",
+            exc_info=True,
+        )
+        raise
 
 
 def _record_failure(exc):

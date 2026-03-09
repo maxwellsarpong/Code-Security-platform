@@ -67,10 +67,10 @@ services:
       - key: JIRA_PROJECT_KEY
         sync: false
 
-      # ── Worker Configuration ──
-      # Poll interval only used by worker service — safe to leave on API
-      - key: WORKER_POLL_INTERVAL
-        value: "5"
+      # ── Worker Mode ──
+      # Explicitly disable synchronous fallback so the API always enqueues to Redis
+      - key: WORKER_SYNC
+        value: "false"
 
       # ── Scanner / Tokens ──
       - key: SCAN_PARALLELISM
@@ -124,9 +124,10 @@ services:
       - key: ALGORITHM
         value: HS256
 
-      # ── Worker Configuration ──
-      - key: WORKER_POLL_INTERVAL
-        value: "5"            # Poll DB every 5s for queued scans
+      # ── Worker Mode ──
+      # Never fall back to sync scanning inside the worker process itself
+      - key: WORKER_SYNC
+        value: "false"
 
       # ── Scanner / AI ──
       - key: SCAN_PARALLELISM

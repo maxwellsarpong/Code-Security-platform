@@ -4,77 +4,102 @@ Usage (from project root):
     REDIS_URL=redis://localhost:6379 python -m app.worker
 """
 
+import os
+import sys
+import logging
+import time
+
+# Setup basic logging to stdout immediately (before any imports that might fail)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    stream=sys.stdout,
+)
+logger = logging.getLogger("app.worker")
+
+
+def _redact_url(url: str) -> str:
+    """Redact password/token from Redis URL for safe logging."""
+    if "@" in url:
+        prefix = url.rsplit("@", 1)[0]
+        suffix = url.rsplit("@", 1)[1]
+        scheme = prefix.split("://")[0]
+        return f"{scheme}://***@{suffix}"
+    return url
+
+
+def _build_redis_conn(redis_url: str):
+    """Build a Redis connection supporting plain redis:// and TLS rediss://."""
+    from redis import Redis
+    kwargs = {}
+    if redis_url.startswith("rediss://"):
+        logger.info("TLS detected (rediss://) — disabling cert verification for Render internal Redis.")
+        kwargs["ssl_cert_reqs"] = None
+    return Redis.from_url(redis_url, **kwargs)
+
+
+def _wait_for_redis(redis_url: str, retries: int = 10, delay: int = 3):
+    """Attempt to connect to Redis with retries. Dies after all retries exhausted."""
+    safe_url = _redact_url(redis_url)
+    for attempt in range(1, retries + 1):
+        try:
+            conn = _build_redis_conn(redis_url)
+            conn.ping()
+            logger.info(f"[attempt {attempt}/{retries}] Redis connected at {safe_url}")
+            return conn
+        except Exception as exc:
+            logger.warning(
+                f"[attempt {attempt}/{retries}] Redis not ready at {safe_url}: {exc}"
+            )
+            if attempt < retries:
+                logger.info(f"Retrying in {delay}s...")
+                time.sleep(delay)
+    logger.error(f"CRITICAL: Could not connect to Redis after {retries} attempts. Exiting.")
+    sys.exit(1)
+
+
 if __name__ == "__main__":
-    # import lazily so running `python -m app.worker` without deps fails clearly
     from redis import Redis
     from rq import Worker, Queue, Connection
-    import os
-    import sys
-    import logging
     import sentry_sdk
     from prometheus_client import start_http_server
-
-    # Setup basic logging to stdout so it appears in Render logs
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        stream=sys.stdout
-    )
-    logger = logging.getLogger("app.worker")
 
     redis_url = os.getenv("REDIS_URL", "redis://localhost:6379")
     sentry_dsn = os.getenv("SENTRY_DSN", "")
     metrics_port = int(os.getenv("WORKER_METRICS_PORT", "9100"))
 
-    logger.info("Starting Security Compliance Platform Worker...")
-    
-    # Redact password for logging
-    redacted_url = redis_url
-    if "@" in redis_url:
-        prefix = redis_url.split("@")[0]
-        suffix = redis_url.split("@")[1]
-        if ":" in prefix:
-            scheme_user = prefix.split(":")[0] + "://" + prefix.split(":")[1].split("//")[1]
-            redacted_url = f"{scheme_user}:****@{suffix}"
-    
-    logger.info(f"Target Redis: {redacted_url}")
+    logger.info("=" * 60)
+    logger.info("Security Compliance Platform Worker — Starting Up")
+    logger.info("=" * 60)
+    logger.info(f"Target Redis  : {_redact_url(redis_url)}")
+    logger.info(f"DATABASE_URL  : {'SET' if os.getenv('DATABASE_URL') else 'NOT SET (will use default)'}")
+    logger.info(f"PYTHONPATH    : {os.getenv('PYTHONPATH', '(not set)')}")
+    logger.info(f"WORKER_SYNC   : {os.getenv('WORKER_SYNC', 'false')}")
+
+    # Validate critical env
+    if not os.getenv("REDIS_URL"):
+        logger.error("REDIS_URL is not set! Worker cannot proceed without a Redis URL.")
+        sys.exit(1)
 
     # init Sentry for the worker process
     if sentry_dsn:
         logger.info("Initializing Sentry...")
         sentry_sdk.init(dsn=sentry_dsn, traces_sample_rate=0.1)
 
-    # start prometheus metrics HTTP server for the worker
+    # Start prometheus metrics HTTP server for the worker
     try:
         logger.info(f"Starting metrics server on port {metrics_port}...")
         start_http_server(metrics_port)
     except Exception as e:
         logger.warning(f"Could not start metrics server: {e}")
 
-    # TLS-safe connection helper
-    def get_conn():
-        kwargs = {}
-        # Render managed Redis usually uses rediss:// for TLS
-        if redis_url.startswith("rediss://"):
-            logger.info("Using TLS connection (rediss:// detected)")
-            kwargs["ssl_cert_reqs"] = None
-        return Redis.from_url(redis_url, **kwargs)
-
-    try:
-        conn = get_conn()
-        logger.info("Pinging Redis...")
-        if conn.ping():
-            logger.info("Redis connectivity confirmed.")
-        else:
-            logger.error("Redis ping failed (returned False).")
-    except Exception as e:
-        logger.error(f"CRITICAL: Failed to connect to Redis: {e}")
-        sys.exit(1)
+    # Wait for Redis to be ready (handles cold-start race on Render)
+    conn = _wait_for_redis(redis_url, retries=10, delay=3)
 
     queues = ["scans", "resolutions"]
     logger.info(f"Listening on queues: {queues}")
-    
+    logger.info("Worker ready. Waiting for jobs...")
+
     with Connection(conn):
         worker = Worker(queues, name=f"scp-worker-{os.uname().nodename}")
-        logger.info(f"Worker {worker.name} started and waiting for jobs...")
-        worker.work()
+        worker.work(with_scheduler=False)

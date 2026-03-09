@@ -25,7 +25,7 @@ services:
     dockerfilePath: ./Dockerfile
     plan: starter           # "free" for testing, "starter" recommended
     region: frankfurt       # Change to your preferred region (oregon, singapore, etc.)
-    healthCheckPath: /api/v1/metrics   # Render will poll this path to confirm health
+    healthCheckPath: /health             # Returns JSON {status, services} — suitable for Render health polling
     autoDeploy: true
 
     envVars:
@@ -66,6 +66,11 @@ services:
         sync: false
       - key: JIRA_PROJECT_KEY
         sync: false
+
+      # ── Worker Mode ──
+      # Explicitly disable synchronous fallback so the API always enqueues to Redis
+      - key: WORKER_SYNC
+        value: "false"
 
       # ── Scanner / Tokens ──
       - key: SCAN_PARALLELISM
@@ -118,6 +123,11 @@ services:
           envVarKey: SECRET_KEY
       - key: ALGORITHM
         value: HS256
+
+      # ── Worker Mode ──
+      # Never fall back to sync scanning inside the worker process itself
+      - key: WORKER_SYNC
+        value: "false"
 
       # ── Scanner / AI ──
       - key: SCAN_PARALLELISM

@@ -164,6 +164,27 @@ def read_scan(scan_id: UUID, session: Session = Depends(get_session), user: User
     return ScanRead.model_validate(scan)
 
 
+@router.delete("/scans/{scan_id}")
+def delete_scan(scan_id: UUID, session: Session = Depends(get_session), user: User = Depends(get_user_from_api_key)):
+    """Remove a scan item that is currently in 'queued' state."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    scan = session.get(Scan, scan_id)
+    if not scan:
+        raise HTTPException(status_code=404, detail="Scan not found")
+        
+    if scan.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+        
+    if scan.status != "queued":
+        raise HTTPException(status_code=400, detail="Only queued scans can be removed")
+        
+    session.delete(scan)
+    session.commit()
+    return {"status": "success", "message": f"Scan {scan_id} removed from queue"}
+
+
 @router.post("/findings/{target_id}/resolve", response_model=ResolutionResponse)
 def resolve_finding(
     target_id: UUID,

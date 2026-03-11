@@ -100,6 +100,9 @@ if __name__ == "__main__":
     logger.info(f"Listening on queues: {queues}")
     logger.info("Worker ready. Waiting for jobs...")
 
+    import uuid
+    worker_name = f"scp-worker-{os.uname().nodename}-{uuid.uuid4().hex[:6]}"
+    logger.info(f"Worker Name: {worker_name}")
     with Connection(conn):
-        worker = Worker(queues, name=f"scp-worker-{os.uname().nodename}")
+        worker = Worker(queues, name=worker_name)
         worker.work(with_scheduler=False)

@@ -234,30 +234,33 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
             for future in as_completed(future_to_scanner):
                 scanner = future_to_scanner[future]
                 try:
-                    findings = future.result()
-                    all_findings.extend(findings)
+                    findings_results = future.result()
+                    if findings_results:
+                        logger.info(f"[{scan_id}] Persisting {len(findings_results)} findings from {scanner.get_name()}...")
+                        for finding_result in findings_results:
+                            finding = Finding(
+                                scan_id=scan.id,
+                                user_id=scan.user_id,
+                                title=finding_result.title,
+                                severity=finding_result.severity,
+                                description=finding_result.description,
+                                remediation=finding_result.remediation,
+                                scanner_name=finding_result.scanner_name,
+                                file_path=finding_result.file_path,
+                                line_number=finding_result.line_number,
+                                cve_id=finding_result.cve_id,
+                                confidence=finding_result.confidence
+                            )
+                            session.add(finding)
+                        
+                        # Commit incrementally to ensure findings are saved even if later scanners fail/hang
+                        session.commit()
+                        all_findings.extend(findings_results)
+                    
                 except Exception as e:
                     _record_failure(e)
 
-        # Store findings in database
-        logger.info(f"Found {len(all_findings)} issues. Saving to database...")
-        for finding_result in all_findings:
-            finding = Finding(
-                scan_id=scan.id,
-                user_id=scan.user_id,
-                title=finding_result.title,
-                severity=finding_result.severity,
-                description=finding_result.description,
-                remediation=finding_result.remediation,
-                scanner_name=finding_result.scanner_name,
-                file_path=finding_result.file_path,
-                line_number=finding_result.line_number,
-                cve_id=finding_result.cve_id,
-                confidence=finding_result.confidence
-            )
-            session.add(finding)
-
-        # Calculate risk score based on findings
+        # Calculate risk score based on aggregated findings
         risk_score = _calculate_risk_score(all_findings)
 
         # Mark scan as completed

@@ -22,6 +22,7 @@ from contextlib import asynccontextmanager
 import logging
 
 logger = logging.getLogger(__name__)
+logger.info("CORE API: FastAPI module loaded.")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

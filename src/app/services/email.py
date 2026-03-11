@@ -5,6 +5,7 @@ import ssl
 from email.message import EmailMessage
 from ..core.config import settings
 
+
 logger = logging.getLogger(__name__)
 
 def send_password_reset_email(email: str, token: str):
@@ -32,17 +33,15 @@ def send_password_reset_email(email: str, token: str):
         msg["To"] = receiver
         msg["Subject"] = "Password Reset Request"
         
-        body = f"You recently requested a password reset.\n\nClick the link below to reset your password:\n{reset_link}\n\nMakesure you don't share this link with anyone.\nIf you did not request this, please ignore this email."
-        msg.attach(MIMEText(body, "plain"))
+        body = f"You recently requested a password reset.\n\nClick the link below to reset your password:\n{reset_link}\n\nMake sure you don't share this link with anyone.\nIf you did not request this, please ignore this email."
+        msg.set_content(body)
         
-        server = smtplib.SMTP(settings.smtp_server, settings.smtp_port)
-        server.starttls()
-        
-        if settings.smtp_username and settings.smtp_password:
-            server.login(settings.smtp_username, settings.smtp_password)
-            
-        server.send_message(msg)
-        server.quit()
+        with smtplib.SMTP(settings.smtp_server, settings.smtp_port) as server:
+            server.ehlo()
+            server.starttls(context=ssl.create_default_context())
+            if settings.smtp_username and settings.smtp_password:
+                server.login(settings.smtp_username, settings.smtp_password)
+            server.send_message(msg)
         logger.info(f"Password reset email sent successfully to {email}")
         
     except Exception as e:

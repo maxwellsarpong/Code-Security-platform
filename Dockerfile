@@ -23,7 +23,8 @@ COPY src/ ./src/
 
 #to be deleted on local run
 COPY worker-entrypoint.sh ./worker-entrypoint.sh
-RUN chmod +x ./worker-entrypoint.sh
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./worker-entrypoint.sh ./entrypoint.sh
 ENV PYTHONPATH=/app/src
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["./entrypoint.sh"]

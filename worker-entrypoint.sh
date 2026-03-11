@@ -23,7 +23,14 @@ fi
 
 echo "DATABASE_URL set: $([ -n "$DATABASE_URL" ] && echo yes || echo no)"
 echo "PYTHONPATH set to: $PYTHONPATH"
+echo "Current Directory: $(pwd)"
+echo "Python Version: $(python --version)"
 echo "---------------------------------------------------------------"
 
+# Small delay to ensure DB and Redis are stable on Render cold start
+echo "Waiting 2 seconds for infrastructure to settle..."
+sleep 2
+
 # Using our custom worker entrypoint which handles TLS correctly
+echo "Executing: python -m app.worker"
 exec python -m app.worker

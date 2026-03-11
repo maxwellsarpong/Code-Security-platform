@@ -38,6 +38,8 @@ services:
           type: redis
           name: security-compliance-redis
           property: connectionString
+      - key: SERVICE_TYPE
+        value: api
 
       # ── Auth ──
       - key: SECRET_KEY
@@ -99,7 +101,7 @@ services:
     dockerfilePath: ./Dockerfile
     # Use the startup script — inline shell expansion of $REDIS_URL doesn't
     # work reliably in Render's dockerCommand field.
-    dockerCommand: /app/worker-entrypoint.sh
+    dockerCommand: ./entrypoint.sh
     plan: starter
     region: frankfurt
     autoDeploy: true
@@ -114,6 +116,8 @@ services:
           type: redis
           name: security-compliance-redis
           property: connectionString
+      - key: SERVICE_TYPE
+        value: worker
 
       # ── Auth (worker needs these for JWT validation) ──
       - key: SECRET_KEY

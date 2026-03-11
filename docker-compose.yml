@@ -2,6 +2,11 @@ version: '3.8'
 services:
   api:
     build: .
+    # links:
+    #   - "redis"
+    #   - "db"
+    #   - "worker"
+
     ports:
       - "8000:8000"
     environment:
@@ -11,6 +16,11 @@ services:
       - ./src:/app/src:cached
       - ./.data:/data
     env_file: .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://0.0.0.0:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
 
   redis:
     image: redis:7-alpine
@@ -23,11 +33,11 @@ services:
       - redis
       - api
     environment:
-      - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=sqlite:////data/dev.db
-      - WORKER_METRICS_PORT=9100
-      - SENTRY_DSN=
-      - SCAN_PARALLELISM=2
+      - REDIS_URL=${REDIS_URL}
+      - DATABASE_URL=${DATABASE_URL}
+      - WORKER_METRICS_PORT=${WORKER_METRICS_PORT}
+      - SENTRY_DSN=${SENTRY_DSN}
+      - SCAN_PARALLELISM=${SCAN_PARALLELISM}
       - PYTHONPATH=/app/src
     deploy:
       resources:

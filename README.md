@@ -61,6 +61,36 @@ docker compose up --build
 # API -> https://code-security-platform.onrender.com
 ```
 
+### Command Line Interface (CLI) 💻
+
+The platform includes a powerful CLI script to trigger scans and resolutions directly from your terminal.
+
+#### 1. Installation
+Ensure you have the dependencies installed:
+```bash
+pip install typer[all] rich requests
+```
+
+#### 2. Usage
+Run the CLI as a Python module from the project root:
+
+```bash
+# Authenticate (Set your API key)
+python -m src.app.cli auth --key <YOUR_API_KEY>
+
+# Start a scan
+python -m src.app.cli scan https://github.com/owner/repo
+
+# Check scan status
+python -m src.app.cli status <scan_id>
+
+# Resolve findings (Bulk fix for a scan)
+python -m src.app.cli resolve <scan_id>
+
+# Check your quota
+python -m src.app.cli usage
+```
+
 ### Authentication
 
 The platform supports **JWT Authentication** (via login) and **API Key Authentication** (for automated services).

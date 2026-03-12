@@ -96,7 +96,7 @@ if __name__ == "__main__":
     # Wait for Redis to be ready (handles cold-start race on Render)
     conn = _wait_for_redis(redis_url, retries=10, delay=3)
 
-    queues = ["scans", "resolutions"]
+    queues = ["emails", "scans", "resolutions"]
     logger.info(f"Listening on queues: {queues}")
     logger.info("Worker ready. Waiting for jobs...")
 

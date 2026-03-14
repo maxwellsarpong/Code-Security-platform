@@ -1,4 +1,5 @@
 import os
+import secrets
 from datetime import datetime, timedelta
 from typing import Any, Union
 from jose import jwt
@@ -55,3 +56,8 @@ def get_password_hash(password: str) -> str:
     salt = bcrypt.gensalt()
     hashed = bcrypt.hashpw(password.encode("utf-8"), salt)
     return hashed.decode("utf-8")
+
+
+def generate_api_key() -> str:
+    """Generate a high-entropy random API key."""
+    return secrets.token_urlsafe(24)

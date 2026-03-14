@@ -172,3 +172,12 @@ class EventRead(BaseModel):
     created_at: datetime
 
     model_config = ConfigDict(from_attributes=True, populate_by_name=True)
+
+
+class APIKeyRead(BaseModel):
+    id: UUID
+    key: str
+    revoked: bool
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

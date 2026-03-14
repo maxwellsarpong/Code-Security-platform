@@ -21,3 +21,5 @@ verify*
 fly.toml
 .dockerignore
 .github/workflows/fly-deploy.yml
+dist
+src/scp_cli.egg-info

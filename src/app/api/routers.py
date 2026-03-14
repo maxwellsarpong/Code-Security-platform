@@ -4,7 +4,7 @@ from sqlalchemy.orm import selectinload
 from typing import List, Optional
 from uuid import UUID
 from datetime import date
-from ..schemas import ScanCreate, ScanRead, ResolutionRequest, ResolutionResponse, FindingRead, UsageRead, UserUsageResponse, UserProfileRead, UserProfileUpdate
+from ..schemas import ScanCreate, ScanRead, ResolutionRequest, ResolutionResponse, FindingRead, UsageRead, UserUsageResponse, UserProfileRead, UserProfileUpdate, APIKeyRead
 from ..models import Scan, User, APIKey, Usage, Finding
 from ..core.db import get_session
 from ..core.billing_plans import get_plan
@@ -13,6 +13,7 @@ from ..services.resolution import ResolutionService
 from ..services.billing import renew_subscription, subscribe_user_to_plan
 from .deps import get_user_from_api_key, get_user_no_quota, get_user_enforce_scan_quota, get_user_enforce_resolve_quota
 from ..core.rate_limiter import get_usage_count, increment_quota_usage
+from ..core.auth import generate_api_key
 import secrets
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
@@ -27,17 +28,28 @@ router.include_router(auth.router, prefix="/auth", tags=["auth"])
 router.include_router(admin.router, prefix="/admin", tags=["admin"])
 
 
-@router.post("/user/api-key", status_code=201)
+@router.post("/user/api-key", response_model=APIKeyRead, status_code=201)
 def create_api_key(session: Session = Depends(get_session), user: User = Depends(get_user_no_quota)):
     """Generate a new API key for the authenticated user."""
     if not user:
         raise HTTPException(status_code=401, detail="Authentication required")
         
-    raw = secrets.token_urlsafe(24)
+    raw = generate_api_key()
     apikey = APIKey(user_id=user.id, key=raw)
     session.add(apikey)
     session.commit()
-    return {"api_key": raw}
+    session.refresh(apikey)
+    return apikey
+
+@router.get("/user/api-keys", response_model=List[APIKeyRead])
+def list_api_keys(session: Session = Depends(get_session), user: User = Depends(get_user_no_quota)):
+    """List all API keys associated with the authenticated user."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    statement = select(APIKey).where(APIKey.user_id == user.id, APIKey.revoked == False)
+    results = session.exec(statement).all()
+    return results
 
 @router.get("/user/profile", response_model=UserProfileRead)
 def get_user_profile(user: User = Depends(get_user_from_api_key)):
@@ -257,6 +269,28 @@ def list_fixed_findings(session: Session = Depends(get_session), user: User = De
     stmt = select(Finding).where(Finding.is_fixed == True, Finding.user_id == user.id)
     findings = session.exec(stmt).all()
     return findings
+
+
+@router.get("/findings/{finding_id}", response_model=FindingRead)
+def read_finding(finding_id: UUID, session: Session = Depends(get_session), user: User = Depends(get_user_from_api_key)):
+    """Fetch details of a specific finding by its ID."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+        
+    finding = session.get(Finding, finding_id)
+    if not finding:
+        # Fallback for string comparison in SQLite
+        search_id_str = normalize_id(finding_id)
+        findings = session.exec(select(Finding).where(Finding.user_id == user.id)).all()
+        finding = next((f for f in findings if normalize_id(f.id) == search_id_str), None)
+
+    if not finding:
+        raise HTTPException(status_code=404, detail="Finding not found")
+    
+    if finding.user_id != user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+        
+    return finding
 
 
 @router.post("/user/subscription/renew")

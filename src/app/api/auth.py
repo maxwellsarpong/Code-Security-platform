@@ -3,10 +3,10 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 from ..core.db import get_session
-from ..core.auth import get_password_hash, verify_password, create_access_token, create_password_reset_token, verify_password_reset_token
+from ..core.auth import get_password_hash, verify_password, create_access_token, create_password_reset_token, verify_password_reset_token, generate_api_key
 from ..services.email import send_password_reset_email
 from ..core.billing_plans import get_plan
-from ..models import User
+from ..models import User, APIKey
 from ..schemas import UserCreate, UserRead, Token, LoginRequest, PasswordRecoveryRequest, PasswordResetRequest, UserRegisterResponse
 
 router = APIRouter()
@@ -36,6 +36,11 @@ def register(user_in: UserCreate, session: Session = Depends(get_session)):
     session.add(user)
     session.commit()
     session.refresh(user)
+    
+    # Generate an initial API key automatically
+    apikey = APIKey(user_id=user.id, key=generate_api_key())
+    session.add(apikey)
+    session.commit()
     
     # Generate token immediately so frontend can login
     access_token = create_access_token(subject=user.email)
@@ -83,6 +88,12 @@ def init_superuser(user_in: UserCreate, session: Session = Depends(get_session))
     session.add(user)
     session.commit()
     session.refresh(user)
+
+    # Generate an initial API key
+    apikey = APIKey(user_id=user.id, key=generate_api_key())
+    session.add(apikey)
+    session.commit()
+
     return user
 
 

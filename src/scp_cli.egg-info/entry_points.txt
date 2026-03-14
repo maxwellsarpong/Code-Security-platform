@@ -1,0 +1,2 @@
+[console_scripts]
+scp-cli = app.cli:app

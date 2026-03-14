@@ -31,7 +31,7 @@ def load_config():
 def get_headers():
     config = load_config()
     if not config:
-        console.print("[bold red]Error:[/bold red] Not authenticated. Run `scp auth --key <your-api-key>` first.")
+        console.print("[bold red]Error:[/bold red] Not authenticated. Run `scp-cli auth --key <your-api-key>` first.")
         raise typer.Exit(code=1)
     return {"x-api-key": config["api_key"]}
 
@@ -78,7 +78,7 @@ def scan(
                 f"[bold cyan]Repository:[/bold cyan] {repo_url}",
                 title="Scan Triggered"
             ))
-            console.print("\nUse `scp status " + data['id'] + "` to check progress.")
+            console.print("\nUse `scp-cli status " + data['id'] + "` to check progress.")
         except Exception as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
 
@@ -131,7 +131,7 @@ def resolve(
     if token:
         payload["github_token"] = token
 
-    with Progress(spinner=SpinnerColumn(), transient=True) as progress:
+    with Progress(SpinnerColumn(), transient=True) as progress:
         progress.add_task(description="Requesting resolution...", total=None)
         try:
             response = requests.post(url, json=payload, headers=headers)
@@ -146,6 +146,78 @@ def resolve(
             else:
                 console.print(f"[bold red]Failed:[/bold red] {data.get('detail', 'Unknown error')}")
         except Exception as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+
+@app.command()
+def resolved():
+    """Check all successfully resolved findings."""
+    url = get_url("/findings/fixed")
+    headers = get_headers()
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        table = Table(title="Resolved Findings")
+        table.add_column("ID", style="cyan")
+        table.add_column("Scanner", style="magenta")
+        table.add_column("Title", style="white")
+        table.add_column("Severity", style="yellow")
+
+        if not data:
+            console.print(Panel("No resolved findings detected yet.", title="Resolved Findings"))
+        else:
+            for f in data:
+                # Truncate ID for readability
+                fid = str(f.get("id"))[:8] if f.get("id") else "N/A"
+                table.add_row(fid, f.get("scanner_name", "N/A"), f.get("title", "N/A")[:50], f.get("severity", "N/A"))
+            
+            console.print(table)
+            console.print(f"\n[dim]Total resolved findings: {len(data)}[/dim]")
+            
+    except Exception as e:
+        if hasattr(e, "response") and e.response is not None:
+            console.print(f"[bold red]Error:[/bold red] {e.response.text}")
+        else:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+
+@app.command()
+def pr(
+    finding_id: str = typer.Argument(..., help="The UUID of the resolved finding")
+):
+    """Get the Pull Request URL for a resolved finding."""
+    url = get_url(f"/findings/{finding_id}")
+    headers = get_headers()
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        if not data.get("is_fixed"):
+            console.print(Panel(f"[bold yellow]Finding {finding_id} is not marked as resolved yet.[/bold yellow]", title="Status"))
+            return
+
+        pr_url = data.get("pr_url")
+        if pr_url:
+            console.print(Panel(
+                f"[bold green]Resolution PR URL:[/bold green]\n{pr_url}", 
+                title=f"Finding: {data.get('title', 'Unknown')}"
+            ))
+        else:
+            console.print(Panel(
+                "[bold yellow]This finding is marked as fixed, but no PR URL was recorded.[/bold yellow]",
+                title="Status"
+            ))
+
+    except Exception as e:
+        if hasattr(e, "response") and e.response is not None:
+            if e.response.status_code == 404:
+                console.print(f"[bold red]Error:[/bold red] Finding '{finding_id}' not found.")
+            else:
+                console.print(f"[bold red]Error:[/bold red] {e.response.text}")
+        else:
             console.print(f"[bold red]Error:[/bold red] {e}")
 
 @app.command()

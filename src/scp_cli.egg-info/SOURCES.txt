@@ -1,3 +1,4 @@
+CLIREADME.md
 README.md
 pyproject.toml
 src/app/__init__.py

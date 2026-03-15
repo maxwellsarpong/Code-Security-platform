@@ -31,7 +31,7 @@ def test_tenant_rate_limit(mock_schedule_scan, client):
     r = client.post("/api/v1/user/api-key", headers={"Authorization": f"Bearer {token}"})
     assert r.status_code == 201
     body = r.json()
-    api_key = body["api_key"]
+    api_key = body["key"]
     
     # Manually configure rate limits in DB
     from app.core.db import engine
@@ -63,7 +63,7 @@ def test_anonymous_rate_limit_applies(mock_schedule_scan, client):
     token_resp = client.post("/api/v1/auth/token", data={"username": "dummy-anon@example.com", "password": "pwd"})
     token = token_resp.json()["access_token"]
     r = client.post("/api/v1/user/api-key", headers={"Authorization": f"Bearer {token}"})
-    api_key = r.json()["api_key"]
+    api_key = r.json()["key"]
     
     from app.core.db import engine
     from sqlmodel import Session, select

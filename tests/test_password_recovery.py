@@ -3,8 +3,10 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session
 from app.models import User
 from app.core.auth import create_password_reset_token, get_password_hash, verify_password
+from unittest.mock import patch
 
-def test_request_password_recovery_existing_user(client: TestClient, session: Session):
+@patch("app.api.auth.send_password_reset_email")
+def test_request_password_recovery_existing_user(mock_send, client: TestClient, session: Session):
     """Test requesting a password reset for an existing user."""
     # Create test user
     client.post("/api/v1/auth/register", json={"email": "recoverytest@example.com", "password": "password123"})
@@ -17,7 +19,8 @@ def test_request_password_recovery_existing_user(client: TestClient, session: Se
     assert "detail" in response.json()
     assert "If your email is registered" in response.json()["detail"]
 
-def test_request_password_recovery_nonexistent_user(client: TestClient):
+@patch("app.api.auth.send_password_reset_email")
+def test_request_password_recovery_nonexistent_user(mock_send, client: TestClient):
     """Test requesting a password reset for a non-existent user."""
     response = client.post(
         "/api/v1/auth/request-password-recovery",

@@ -14,7 +14,7 @@ def test_resolve_finding_endpoint(client, session):
     token_resp = client.post("/api/v1/auth/token", data={"username": email, "password": "pwd"})
     token = token_resp.json()["access_token"]
     response = client.post("/api/v1/user/api-key", headers={"Authorization": f"Bearer {token}"})
-    api_key = response.json()["api_key"]
+    api_key = response.json()["key"]
     headers = {"x-api-key": api_key}
 
     # Setup: Create a scan and a finding
@@ -67,7 +67,7 @@ def test_resolve_finding_not_found(client, session):
     token_resp = client.post("/api/v1/auth/token", data={"username": email, "password": "pwd"})
     token = token_resp.json()["access_token"]
     response = client.post("/api/v1/user/api-key", headers={"Authorization": f"Bearer {token}"})
-    api_key = response.json()["api_key"]
+    api_key = response.json()["key"]
     headers = {"x-api-key": api_key}
 
     random_id = uuid4()

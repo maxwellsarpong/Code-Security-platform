@@ -55,7 +55,7 @@ def auth_client_fixture(client: TestClient):
     token = token_resp.json()["access_token"]
     response = client.post("/api/v1/user/api-key", headers={"Authorization": f"Bearer {token}"})
     data = response.json()
-    api_key = data["api_key"]
+    api_key = data["key"]
     client.headers.update({"x-api-key": api_key})
     return client
 

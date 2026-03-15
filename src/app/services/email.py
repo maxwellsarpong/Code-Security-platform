@@ -36,35 +36,36 @@ def _send_email_smtp(msg: EmailMessage, email_type: str = "Email"):
         logger.warning(f"SMTP server not configured. {email_type} to {msg['To']} not sent.")
         return
 
-    timeout = 30 # Increased to 30s to help with slow greetings/networks
+    timeout = 30 
     try:
         if settings.smtp_port == 465:
-            # SSL/TLS (Implicit)
-            logger.info(f"Connecting to {settings.smtp_server}:{settings.smtp_port} (SSL)...")
+            logger.info(f"Connecting to {settings.smtp_server}:{settings.smtp_port} (SSL/TLS)...")
             context = ssl.create_default_context()
-            with smtplib.SMTP_SSL(settings.smtp_server, settings.smtp_port, context=context, timeout=timeout) as server:
-                logger.debug("Successfully connected (SSL). Logging in...")
-                if settings.smtp_username and settings.smtp_password:
-                    server.login(settings.smtp_username, settings.smtp_password)
-                logger.debug("Logged in. Sending message...")
-                server.send_message(msg)
+            server = smtplib.SMTP_SSL(settings.smtp_server, settings.smtp_port, context=context, timeout=timeout)
         else:
-            # STARTTLS (Explicit)
             logger.info(f"Connecting to {settings.smtp_server}:{settings.smtp_port} (STARTTLS)...")
-            with smtplib.SMTP(settings.smtp_server, settings.smtp_port, timeout=timeout) as server:
-                logger.debug("Connected. Sending EHLO...")
-                server.ehlo()
+            server = smtplib.SMTP(settings.smtp_server, settings.smtp_port, timeout=timeout)
+            
+        with server:
+            logger.debug("Connected to SMTP server. Sending EHLO...")
+            server.ehlo()
+            
+            if settings.smtp_port != 465:
                 logger.debug("Starting TLS...")
                 server.starttls(context=ssl.create_default_context())
-                logger.debug("Sending EHLO after TLS...")
                 server.ehlo()
-                if settings.smtp_username and settings.smtp_password:
-                    logger.debug("Logging in...")
-                    server.login(settings.smtp_username, settings.smtp_password)
-                logger.debug("Sending message...")
-                server.send_message(msg)
+                
+            if settings.smtp_username and settings.smtp_password:
+                logger.debug(f"Attempting login for {settings.smtp_username}...")
+                server.login(settings.smtp_username, settings.smtp_password)
+                
+            logger.debug("Sending message...")
+            server.send_message(msg)
         
         logger.info(f"{email_type} sent successfully to {msg['To']}")
+    except smtplib.SMTPServerDisconnected:
+        logger.error(f"SMTP Disconnected unexpectedly while sending {email_type} to {msg['To']}. Check port {settings.smtp_port} or network.")
+        raise
     except Exception as e:
         logger.error(f"SMTP Error sending {email_type} to {msg['To']}: {str(e)}")
         raise

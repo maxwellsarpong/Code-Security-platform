@@ -42,7 +42,7 @@ def test_billing_recorded_after_scan(mock_schedule_scan, client):
     response = client.post("/api/v1/user/api-key", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 201
     body = response.json()
-    api_key = body["api_key"]
+    api_key = body["key"]
     
     # Get user id from profile to configure rate limit and for checks
     profile_response = client.get("/api/v1/user/profile", headers={"Authorization": f"Bearer {token}"})

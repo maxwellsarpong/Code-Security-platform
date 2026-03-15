@@ -10,8 +10,15 @@ from rich.panel import Panel
 from typing import Optional
 from uuid import UUID
 
+from app import __version__
+
 app = typer.Typer(help="Security Compliance Platform CLI - Secure your code from the terminal.")
 console = Console()
+
+def version_callback(value: bool):
+    if value:
+        console.print(f"scp-cli version: [bold cyan]{__version__}[/bold cyan]")
+        raise typer.Exit()
 
 CONFIG_DIR = Path.home() / ".scp"
 CONFIG_FILE = CONFIG_DIR / "config.json"
@@ -39,6 +46,22 @@ def get_url(endpoint: str):
     config = load_config()
     base_url = config["api_url"] if config else DEFAULT_API_URL
     return f"{base_url.rstrip('/')}/api/v1{endpoint}"
+
+@app.callback()
+def main(
+    version: Optional[bool] = typer.Option(
+        None, "--version", "-v", callback=version_callback, is_eager=True, help="Show the version and exit."
+    ),
+):
+    """
+    Security Compliance Platform CLI
+    """
+    pass
+
+@app.command()
+def version():
+    """Display the current version of scp-cli."""
+    console.print(f"scp-cli version: [bold cyan]{__version__}[/bold cyan]")
 
 @app.command()
 def auth(

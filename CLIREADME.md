@@ -41,9 +41,14 @@ pip install typer[all] rich requests
 ```
 
 #### 2. Usage
-Run the CLI as a Python module from the project root:
+[Get your API key from the dashboard](https://code-security-platform-frontend-lan.vercel.app/login)
+
+Running the CLI tool
 
 ```bash
+# Showing the help menu
+scp-cli --help
+
 # Authenticate (Set your API key)
 scp-cli auth --key <YOUR_API_KEY>
 

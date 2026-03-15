@@ -35,6 +35,17 @@ The platform integrates four industry-standard security scanners:
 The platform includes a powerful CLI script to trigger scans and resolutions directly from your terminal.
 
 #### 1. Installation
+
+**Recommended: Using uv (Isolated)**
+```bash
+uv tool install scp-cli
+```
+
+**Using pip**
+```bash
+pip install scp-cli --upgrade
+```
+
 Ensure you have the dependencies installed:
 ```bash
 pip install typer[all] rich requests

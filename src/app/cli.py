@@ -12,7 +12,10 @@ from uuid import UUID
 
 from app import __version__
 
-app = typer.Typer(help="Security Compliance Platform CLI - Secure your code from the terminal.")
+app = typer.Typer(
+    help="Security Compliance Platform CLI - Secure your code from the terminal.",
+    add_completion=False
+)
 console = Console()
 
 def version_callback(value: bool):
@@ -50,7 +53,7 @@ def get_url(endpoint: str):
 @app.callback()
 def main(
     version: Optional[bool] = typer.Option(
-        None, "--version", "-v", callback=version_callback, is_eager=True, help="Show the version and exit."
+        None, "--version", "-v", callback=version_callback, is_eager=True, help="Show the version and exit.", hidden=True
     ),
 ):
     """

@@ -143,6 +143,9 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
     repo_dir = None
 
     try:
+        # Maintenance: Prune old binary data to keep DB light
+        _prune_old_scan_data(session)
+        
         # Fetch scan from database
         scan = session.get(Scan, scan_id)
         if not scan:
@@ -159,13 +162,23 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
         repo_path = Path(repo_dir)
 
         if scan.is_local:
-            if not scan.zip_path or not Path(scan.zip_path).exists():
-                raise Exception(f"Local scan zip file not found at {scan.zip_path}")
+            if not scan.zip_data:
+                raise Exception(f"Local scan zip data missing for scan {scan.id}")
             
-            logger.info(f"Extracting local workspace: {scan.zip_path}")
+            logger.info(f"Extracting local workspace from DB for scan: {scan.id}")
             try:
-                with zipfile.ZipFile(scan.zip_path, 'r') as zip_ref:
-                    zip_ref.extractall(repo_dir)
+                # Use a NamedTemporaryFile to write the binary data from DB
+                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
+                    tmp_zip.write(scan.zip_data)
+                    tmp_zip_path = tmp_zip.name
+                
+                try:
+                    with zipfile.ZipFile(tmp_zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(repo_dir)
+                finally:
+                    # Always clean up the temporary zip file on the worker's disk
+                    if os.path.exists(tmp_zip_path):
+                        os.unlink(tmp_zip_path)
             except Exception as e:
                 raise Exception(f"Failed to extract local workspace: {e}")
         else:
@@ -348,6 +361,31 @@ def _calculate_risk_score(findings: list) -> float:
     normalized_score = min(10.0, (total_score / max_score) * 10.0)
     
     return round(normalized_score, 2)
+
+
+
+def _prune_old_scan_data(session: Session, hours: int = 2):
+    """
+    Clear binary scan data for local scans older than a certain retention period.
+    This keeps the production database light and high-performing.
+    """
+    try:
+        from sqlalchemy import text
+        import datetime
+        
+        # Calculate retention threshold
+        threshold = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
+        
+        # Find local scans with binary data that are older than the threshold
+        # We use raw SQL for performance and to ensure LargeBinary nullification
+        stmt = text("UPDATE scan SET zip_data = NULL WHERE is_local = TRUE AND created_at < :threshold AND zip_data IS NOT NULL")
+        result = session.execute(stmt, {"threshold": threshold})
+        session.commit()
+        
+        if result.rowcount > 0:
+            logger.info(f"[Maintenance] Pruned binary data for {result.rowcount} old scan(s) (older than {hours}h).")
+    except Exception as e:
+        logger.error(f"[Maintenance] Failed to prune old scan data: {e}")
 
 
 

@@ -20,14 +20,9 @@ def test_local_scan_upload_success(auth_client):
     data = response.json()
     assert data["is_local"] is True
     assert data["status"] == "queued"
-    assert "zip_path" in data
     
-    zip_path = Path(data["zip_path"])
-    assert zip_path.exists()
-    
-    # Cleanup
-    if zip_path.exists():
-        zip_path.unlink()
+    # We no longer verify zip_path existence since zip_data is stored in the DB
+    # and processed by the worker from there.
 
 def test_local_scan_invalid_file_type(auth_client):
     response = auth_client.post(

@@ -56,6 +56,12 @@ def init_db():
             conn.execute(text("ALTER TABLE scan ADD COLUMN zip_path VARCHAR"))
             conn.commit()
 
+        if 'zip_data' not in scan_cols:
+            logger.info("Migration: Adding column 'zip_data' to table 'scan'...")
+            col_type = "BYTEA" if engine.dialect.name == 'postgresql' else "BLOB"
+            conn.execute(text(f"ALTER TABLE scan ADD COLUMN zip_data {col_type}"))
+            conn.commit()
+
         # Handle repo_url nullability for PostgreSQL
         if engine.dialect.name == 'postgresql':
             try:

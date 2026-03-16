@@ -1,4 +1,4 @@
-from sqlmodel import SQLModel, Field, Column, JSON, Relationship
+from sqlmodel import SQLModel, Field, Column, JSON, Relationship, LargeBinary
 from typing import Optional, List, Any, Dict
 from uuid import UUID, uuid4
 from datetime import datetime, date
@@ -42,6 +42,7 @@ class Scan(SQLModel, table=True):
     repo_url: Optional[str] = None
     is_local: bool = Field(default=False)
     zip_path: Optional[str] = None
+    zip_data: Optional[bytes] = Field(default=None, sa_column=Column(LargeBinary))
     status: str = "queued"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None

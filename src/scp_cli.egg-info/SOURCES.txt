@@ -46,6 +46,7 @@ tests/test_billing_event_alias.py
 tests/test_findings_persistence.py
 tests/test_health_advanced.py
 tests/test_list_scans.py
+tests/test_local_scan.py
 tests/test_metrics.py
 tests/test_multi_tenancy_new.py
 tests/test_npm_audit_scanner.py

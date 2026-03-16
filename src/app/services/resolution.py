@@ -180,13 +180,28 @@ class ResolutionService:
             logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Setting up repository: {scan.repo_url or 'Local Workspace'}")
 
             if scan.is_local:
-                # For local scans, we use the uploaded zip
-                if not scan.zip_path or not os.path.exists(scan.zip_path):
-                    raise Exception(f"Local scan zip file not found at {scan.zip_path}")
+                # For local scans, we use the uploaded zip content from the database
+                if not scan.zip_data:
+                    logger.warning(f"[{scan.id}] FAILED: Local scan zip data is missing (likely pruned for storage).")
+                    raise Exception(
+                        "Local scan source code is no longer available in the database. "
+                        "Binary data is automatically pruned after 2 hours to keep the database light. "
+                        "Please run a new scan from your CLI to resolve these findings."
+                    )
                 
+                logger.info(f"[{scan.id}] Extracting local workspace from DB for resolution.")
                 import zipfile
-                with zipfile.ZipFile(scan.zip_path, 'r') as zip_ref:
-                    zip_ref.extractall(repo_dir)
+                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_zip:
+                    tmp_zip.write(scan.zip_data)
+                    tmp_zip_path = tmp_zip.name
+                
+                try:
+                    with zipfile.ZipFile(tmp_zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(repo_dir)
+                finally:
+                    # Clean up temporary zip on the worker's disk
+                    if os.path.exists(tmp_zip_path):
+                        os.unlink(tmp_zip_path)
                 
                 default_branch = "local"
                 branch_name = "local"

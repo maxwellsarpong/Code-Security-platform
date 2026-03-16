@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: scp-cli
-Version: 0.1.8
+Version: 0.1.10
 Summary: Security Compliance Platform CLI - Secure your code from the terminal.
 Author-email: Maxwell Sarpong <maxwell@example.com>
 Classifier: Programming Language :: Python :: 3
@@ -60,11 +60,6 @@ uv tool install scp-cli
 pip install scp-cli --upgrade
 ```
 
-Ensure you have the dependencies installed:
-```bash
-pip install typer[all] rich requests
-```
-
 #### 2. Usage
 [Get your API key from the dashboard](https://code-security-platform-frontend-lan.vercel.app/login)
 
@@ -77,14 +72,22 @@ scp-cli --help
 # Authenticate (Set your API key)
 scp-cli auth --key <YOUR_API_KEY>
 
-# Start a scan
+# Start a remote scan
 scp-cli scan https://github.com/owner/repo
 
-# Check scan status
+# Start a local workspace scan (automatic zipping & upload)
+scp-cli scan .
+
+# Check scan status (summarized results)
 scp-cli status <scan_id>
 
+# List all security issues for a scan (get Finding IDs)
+scp-cli findings <scan_id>
+
 # Resolve findings (Bulk fix for a scan)
-scp-cli resolve <scan_id>
+# - For remote repos: Creates a Pull Request and returns the URL.
+# - For local scans: Generates and applies fixes directly to your files (with backups).
+scp-cli resolve <id_or_finding_id>
 
 # Check all successfully resolved findings
 scp-cli resolved

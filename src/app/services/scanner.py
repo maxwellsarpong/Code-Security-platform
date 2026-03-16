@@ -5,6 +5,7 @@ import os
 import logging
 import sentry_sdk
 import shutil
+import zipfile
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from sqlmodel import Session
@@ -157,44 +158,55 @@ def schedule_scan(scan_id, user_id: Optional[str] = None):
         repo_dir = tempfile.mkdtemp(prefix="scan_")
         repo_path = Path(repo_dir)
 
-        clone_url = scan.repo_url
-        token = scan.git_token
-        
-        # If no token in DB, check settings based on platform
-        if not token:
-            platform = "github"
-            if "gitlab.com" in scan.repo_url.lower():
-                platform = "gitlab"
-            elif "bitbucket.org" in scan.repo_url.lower():
-                platform = "bitbucket"
+        if scan.is_local:
+            if not scan.zip_path or not Path(scan.zip_path).exists():
+                raise Exception(f"Local scan zip file not found at {scan.zip_path}")
             
-            if platform == "github":
-                token = settings.github_token
-            elif platform == "gitlab":
-                token = settings.gitlab_token
-            elif platform == "bitbucket":
-                token = settings.bitbucket_token
-
-        if token:
-            # Reconstruct URL with token: https://<token>@github.com/user/repo.git
-            from urllib.parse import urlparse, urlunparse
-            parsed = urlparse(scan.repo_url)
-            clone_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
-
-        try:
-            logger.info(f"Cloning repository: {scan.repo_url}") # Log without token
-            # Force HTTP/1.1 and larger buffer for stability on complex repos
-            env = os.environ.copy()
-            env["GIT_HTTP_LOW_SPEED_LIMIT"] = "0"
-            env["GIT_HTTP_LOW_SPEED_TIME"] = "999999"
+            logger.info(f"Extracting local workspace: {scan.zip_path}")
+            try:
+                with zipfile.ZipFile(scan.zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(repo_dir)
+            except Exception as e:
+                raise Exception(f"Failed to extract local workspace: {e}")
+        else:
+            clone_url = scan.repo_url
+            token = scan.git_token
             
-            Repo.clone_from(clone_url, repo_dir, depth=1, env=env)
-        except Exception as e:
-            # Redact token from error message if possible
-            error_msg = str(e)
-            if scan.git_token:
-                error_msg = error_msg.replace(scan.git_token, "********")
-            raise Exception(f"Failed to clone repository: {error_msg}")
+            # If no token in DB, check settings based on platform
+            if not token:
+                platform = "github"
+                if "gitlab.com" in scan.repo_url.lower():
+                    platform = "gitlab"
+                elif "bitbucket.org" in scan.repo_url.lower():
+                    platform = "bitbucket"
+                
+                if platform == "github":
+                    token = settings.github_token
+                elif platform == "gitlab":
+                    token = settings.gitlab_token
+                elif platform == "bitbucket":
+                    token = settings.bitbucket_token
+
+            if token:
+                # Reconstruct URL with token: https://<token>@github.com/user/repo.git
+                from urllib.parse import urlparse, urlunparse
+                parsed = urlparse(scan.repo_url)
+                clone_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
+
+            try:
+                logger.info(f"Cloning repository: {scan.repo_url}") # Log without token
+                # Force HTTP/1.1 and larger buffer for stability on complex repos
+                env = os.environ.copy()
+                env["GIT_HTTP_LOW_SPEED_LIMIT"] = "0"
+                env["GIT_HTTP_LOW_SPEED_TIME"] = "999999"
+                
+                Repo.clone_from(clone_url, repo_dir, depth=1, env=env)
+            except Exception as e:
+                # Redact token from error message if possible
+                error_msg = str(e)
+                if scan.git_token:
+                    error_msg = error_msg.replace(scan.git_token, "********")
+                raise Exception(f"Failed to clone repository: {error_msg}")
 
         # Initialize scanners
         scanners = [

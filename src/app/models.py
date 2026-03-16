@@ -39,7 +39,9 @@ class User(SQLModel, table=True):
 class Scan(SQLModel, table=True):
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     user_id: UUID = Field(foreign_key="user.id", index=True)
-    repo_url: str
+    repo_url: Optional[str] = None
+    is_local: bool = Field(default=False)
+    zip_path: Optional[str] = None
     status: str = "queued"
     created_at: datetime = Field(default_factory=datetime.utcnow)
     completed_at: Optional[datetime] = None

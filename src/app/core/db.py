@@ -45,6 +45,29 @@ def init_db():
             logger.info("Migration: Adding column 'user_id' to table 'scan'...")
             conn.execute(text("ALTER TABLE scan ADD COLUMN user_id VARCHAR"))
             conn.commit()
+        
+        if 'is_local' not in scan_cols:
+            logger.info("Migration: Adding column 'is_local' to table 'scan'...")
+            conn.execute(text("ALTER TABLE scan ADD COLUMN is_local BOOLEAN DEFAULT FALSE"))
+            conn.commit()
+
+        if 'zip_path' not in scan_cols:
+            logger.info("Migration: Adding column 'zip_path' to table 'scan'...")
+            conn.execute(text("ALTER TABLE scan ADD COLUMN zip_path VARCHAR"))
+            conn.commit()
+
+        # Handle repo_url nullability for PostgreSQL
+        if engine.dialect.name == 'postgresql':
+            try:
+                # Check if it's currently NOT NULL
+                cols = inspector.get_columns('scan')
+                repo_url_col = next((c for c in cols if c['name'] == 'repo_url'), None)
+                if repo_url_col and not repo_url_col.get('nullable', True):
+                    logger.info("Migration: Making 'repo_url' nullable in 'scan' table...")
+                    conn.execute(text("ALTER TABLE scan ALTER COLUMN repo_url DROP NOT NULL"))
+                    conn.commit()
+            except Exception as e:
+                logger.error(f"Migration error (repo_url nullability): {e}")
 
         # 3. Update 'user' table
         user_cols = [col['name'] for col in inspector.get_columns('user')]

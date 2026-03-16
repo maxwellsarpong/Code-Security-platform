@@ -89,7 +89,7 @@ class UserRegisterResponse(BaseModel):
 
 
 class ScanCreate(BaseModel):
-    repo_url: HttpUrl
+    repo_url: Optional[str] = None
     git_token: Optional[str] = None
 
 
@@ -115,7 +115,9 @@ class FindingRead(BaseModel):
 class ScanRead(BaseModel):
     id: UUID
     user_id: UUID
-    repo_url: HttpUrl
+    repo_url: Optional[str] = None
+    is_local: bool = False
+    zip_path: Optional[str] = None
     status: str
     created_at: datetime
     completed_at: Optional[datetime]
@@ -129,11 +131,17 @@ class ResolutionRequest(BaseModel):
     github_token: Optional[str] = None
 
 
+class WorkspaceFix(BaseModel):
+    file_path: str
+    new_content: str
+
+
 class ResolutionResponse(BaseModel):
     status: str
     pr_url: Optional[str] = None
     finding_id: UUID
     message: str
+    fixes: Optional[List[WorkspaceFix]] = None
 
 
 class UsageRead(BaseModel):

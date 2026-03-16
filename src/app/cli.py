@@ -2,11 +2,14 @@ import typer
 import requests
 import json
 import os
+import tempfile
+import zipfile
 from pathlib import Path
 from rich.console import Console
 from rich.table import Table
 from rich.progress import Progress, SpinnerColumn, TextColumn
 from rich.panel import Panel
+import shutil
 from typing import Optional
 from uuid import UUID
 
@@ -50,6 +53,20 @@ def get_url(endpoint: str):
     base_url = config["api_url"] if config else DEFAULT_API_URL
     return f"{base_url.rstrip('/')}/api/v1{endpoint}"
 
+def _zip_directory(path: Path, zip_handle: zipfile.ZipFile):
+    """Recursively zip a path (file or directory)."""
+    if path.is_file():
+        zip_handle.write(path, path.name)
+        return
+
+    exclude_dirs = {".git", ".venv", "venv", "node_modules", "__pycache__", ".pytest_cache", ".scp"}
+    for root, dirs, files in os.walk(path):
+        dirs[:] = [d for d in dirs if d not in exclude_dirs]
+        for file in files:
+            file_path = Path(root) / file
+            arcname = file_path.relative_to(path)
+            zip_handle.write(file_path, arcname)
+
 @app.callback()
 def main(
     version: Optional[bool] = typer.Option(
@@ -77,34 +94,60 @@ def auth(
 
 @app.command()
 def scan(
-    repo_url: str = typer.Argument(..., help="URL of the repository to scan"),
+    repo_url: str = typer.Argument(..., help="URL of the repository OR local directory path (e.g. '.')"),
     token: Optional[str] = typer.Option(None, help="GitHub/GitLab Personal Access Token for private repos")
 ):
-    """Trigger a new security scan for a repository."""
-    url = get_url("/scans")
+    """Trigger a new security scan for a repository or local workspace."""
     headers = get_headers()
-    payload = {"repo_url": repo_url}
-    if token:
-        payload["github_token"] = token
-
+    local_path = Path(repo_url).expanduser().resolve()
+    
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         transient=True,
     ) as progress:
-        progress.add_task(description="Triggering scan...", total=None)
         try:
-            response = requests.post(url, json=payload, headers=headers)
-            response.raise_for_status()
-            data = response.json()
-            
+            # Check if the input is a local file or directory
+            if local_path.exists():
+                progress.add_task(description=f"Preparing local scan for {local_path.name}...", total=None)
+                with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
+                    tmp_path = Path(tmp.name)
+                    with zipfile.ZipFile(tmp_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+                        _zip_directory(local_path, zf)
+                
+                progress.add_task(description="Uploading workspace for scan...", total=None)
+                url = get_url("/scans/local")
+                try:
+                    with open(tmp_path, "rb") as f:
+                        files = {"file": (f"{local_path.name}.zip", f, "application/zip")}
+                        response = requests.post(url, files=files, headers=headers)
+                        response.raise_for_status()
+                        data = response.json()
+                finally:
+                    if tmp_path.exists():
+                        tmp_path.unlink()
+                
+                label = f"Local: {local_path}"
+            else:
+                # Assume it's a remote URL
+                progress.add_task(description="Triggering remote scan...", total=None)
+                url = get_url("/scans")
+                payload = {"repo_url": repo_url}
+                if token:
+                    payload["github_token"] = token
+                response = requests.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                label = repo_url
+
             console.print(Panel(
                 f"[bold cyan]Scan ID:[/bold cyan] {data['id']}\n"
                 f"[bold cyan]Status:[/bold cyan] {data['status']}\n"
-                f"[bold cyan]Repository:[/bold cyan] {repo_url}",
+                f"[bold cyan]Target:[/bold cyan] {label}",
                 title="Scan Triggered"
             ))
             console.print("\nUse `scp-cli status " + data['id'] + "` to check progress.")
+            
         except Exception as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
 
@@ -146,31 +189,133 @@ def status(
         console.print(f"[bold red]Error:[/bold red] {e}")
 
 @app.command()
+def findings(
+    scan_id: str = typer.Argument(..., help="The UUID of the scan")
+):
+    """List detailed security issues for a specific scan."""
+    url = get_url(f"/scans/{scan_id}")
+    headers = get_headers()
+
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        data = response.json()
+
+        findings_list = data.get("findings", [])
+        if not findings_list:
+            console.print(Panel(f"Scan Status: [bold green]{data['status']}[/bold green]\nNo findings detected yet.", title=f"Scan {scan_id}"))
+        else:
+            table = Table(title=f"Findings for Scan: {scan_id}")
+            table.add_column("ID", style="cyan")
+            table.add_column("Severity", style="red")
+            table.add_column("File Path", style="yellow")
+            table.add_column("Status", style="green")
+
+            for f in findings_list:
+                status_str = "[green][bold]Fixed[/bold][/green]" if f["is_fixed"] else "[yellow]Open[/yellow]"
+                table.add_row(
+                    f["id"],
+                    f.get("severity", "N/A"),
+                    f"{f.get('file_path', 'N/A')}:{f.get('line_number', '')}" if f.get("line_number") else f.get("file_path", "N/A"),
+                    status_str
+                )
+            
+            console.print(table)
+            console.print(f"\n[dim]Total findings in this scan: {len(findings_list)}[/dim]")
+            
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+
+@app.command()
 def resolve(
     target_id: str = typer.Argument(..., help="Finding ID or Scan ID to resolve"),
     token: Optional[str] = typer.Option(None, help="GitHub token (if not saved in profile)")
 ):
     """Trigger automated resolution for a finding or an entire scan."""
-    url = get_url(f"/findings/{target_id}/resolve")
     headers = get_headers()
+    
+    # 1. Determine if it's a local scan to request sync resolution
+    is_local_scan = False
+    try:
+        check_url = get_url(f"/scans/{target_id}")
+        check_resp = requests.get(check_url, headers=headers)
+        if check_resp.status_code == 200:
+            is_local_scan = check_resp.json().get("is_local", False)
+        elif check_resp.status_code == 404:
+            # Maybe it's a Finding ID. Check the finding's parent scan.
+            finding_url = get_url(f"/findings/{target_id}")
+            finding_resp = requests.get(finding_url, headers=headers)
+            if finding_resp.status_code == 200:
+                scan_id = finding_resp.json().get("scan_id")
+                scan_resp = requests.get(get_url(f"/scans/{scan_id}"), headers=headers)
+                if scan_resp.status_code == 200:
+                    is_local_scan = scan_resp.json().get("is_local", False)
+    except:
+        pass
+
+    url = get_url(f"/findings/{target_id}/resolve")
     payload = {}
     if token:
         payload["github_token"] = token
+    
+    # Always request synchronous resolution from the CLI for immediate feedback
+    params = {"force_sync": "true"}
 
     with Progress(SpinnerColumn(), transient=True) as progress:
-        progress.add_task(description="Requesting resolution...", total=None)
+        description = "Processing resolution..."
+        if is_local_scan:
+            description = "Generating local fixes (this may take a minute)..."
+        else:
+            description = "Generating fixes and creating Pull Request..."
+        
+        progress.add_task(description=description, total=None)
         try:
-            response = requests.post(url, json=payload, headers=headers)
+            # Increase timeout to 180s to allow for AI generation + Git operations
+            response = requests.post(url, json=payload, headers=headers, params=params, timeout=180)
             data = response.json()
             
             if response.status_code == 200:
+                pr_url = data.get("pr_url")
+                message = data.get("message")
+                
+                output_content = f"[bold green]Status:[/bold green] {data['status']}\n"
+                output_content += f"[bold white]Message:[/bold white] {message}"
+                
+                if pr_url and pr_url != "local-fix-applied":
+                    output_content += f"\n[bold cyan]Pull Request:[/bold cyan] [link={pr_url}]{pr_url}[/link]"
+
                 console.print(Panel(
-                    f"[bold green]Status:[/bold green] {data['status']}\n"
-                    f"[bold white]Message:[/bold white] {data['message']}",
-                    title="Resolution Started"
+                    output_content,
+                    title="Resolution Success"
                 ))
+                
+                # Handle local fixes if present
+                fixes = data.get("fixes")
+                if fixes:
+                    console.print(f"\n[bold cyan]Detected {len(fixes)} local workspace fixes.[/bold cyan]")
+                    if typer.confirm("Would you like to apply these fixes to your local workspace now?"):
+                        for fix in fixes:
+                            file_path = fix["file_path"]
+                            new_content = fix["new_content"]
+                            
+                            local_file = Path(file_path.lstrip("/"))
+                            if local_file.exists():
+                                backup = local_file.with_suffix(local_file.suffix + ".bak")
+                                shutil.copy2(local_file, backup)
+                                console.print(f"  [dim]Backup created: {backup.name}[/dim]")
+                            
+                            local_file.parent.mkdir(parents=True, exist_ok=True)
+                            with open(local_file, "w") as f:
+                                f.write(new_content)
+                            console.print(f"  [bold green]✓ Applied fix to {file_path}[/bold green]")
+                        
+                        console.print("\n[bold green]Workspace fixes applied successfully![/bold green]")
+                        console.print("[dim]Please review the changes and run your tests.[/dim]")
             else:
                 console.print(f"[bold red]Failed:[/bold red] {data.get('detail', 'Unknown error')}")
+        except requests.exceptions.Timeout:
+            console.print("[bold red]Error:[/bold red] The request timed out. The resolution might still be running in the background.")
+            console.print("[dim]You can check the status later using 'scp-cli status' or 'scp-cli pr'.[/dim]")
         except Exception as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
 
@@ -218,6 +363,22 @@ def pr(
 
     try:
         response = requests.get(url, headers=headers)
+        
+        if response.status_code == 404:
+            # Check if user accidentally passed a Scan ID
+            scans_url = get_url(f"/scans/{finding_id}")
+            scan_check = requests.get(scans_url, headers=headers)
+            if scan_check.status_code == 200:
+                console.print(Panel(
+                    f"[bold yellow]Note:[/bold yellow] {finding_id} is a [bold cyan]Scan ID[/bold cyan].\n"
+                    "The `pr` command requires a [bold magenta]Finding ID[/bold magenta].\n"
+                    "Use `scp-cli status " + finding_id + "` to see the findings and their IDs.",
+                    title="Incorrect ID Type"
+                ))
+            else:
+                console.print(f"[bold red]Error:[/bold red] Finding '{finding_id}' not found.")
+            return
+
         response.raise_for_status()
         data = response.json()
 
@@ -226,7 +387,14 @@ def pr(
             return
 
         pr_url = data.get("pr_url")
-        if pr_url:
+        if pr_url == "local-fix-applied":
+            console.print(Panel(
+                "[bold green]Finding Resolved Locally[/bold green]\n\n"
+                "A fix was generated in the temporary workspace, but a Pull Request cannot "
+                "be opened for local scans. Please check the scan results for details.",
+                title=f"Finding: {data.get('title', 'Unknown')}"
+            ))
+        elif pr_url:
             console.print(Panel(
                 f"[bold green]Resolution PR URL:[/bold green]\n{pr_url}", 
                 title=f"Finding: {data.get('title', 'Unknown')}"

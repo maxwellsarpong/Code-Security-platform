@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, Response
+from fastapi import APIRouter, Depends, HTTPException, Header, Response, File, UploadFile
 from sqlmodel import Session, select
 from sqlalchemy.orm import selectinload
 from typing import List, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 from datetime import date
 from ..schemas import ScanCreate, ScanRead, ResolutionRequest, ResolutionResponse, FindingRead, UsageRead, UserUsageResponse, UserProfileRead, UserProfileUpdate, APIKeyRead
 from ..models import Scan, User, APIKey, Usage, Finding
@@ -15,6 +15,9 @@ from .deps import get_user_from_api_key, get_user_no_quota, get_user_enforce_sca
 from ..core.rate_limiter import get_usage_count, increment_quota_usage
 from ..core.auth import generate_api_key
 import secrets
+import shutil
+import os
+from pathlib import Path
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
 from . import auth, admin
@@ -147,6 +150,60 @@ def create_scan(payload: ScanCreate, user: User = Depends(get_user_enforce_scan_
         )
 
     return response
+
+
+@router.post("/scans/local", response_model=ScanRead, status_code=201)
+def create_local_scan(
+    file: UploadFile = File(...),
+    user: User = Depends(get_user_enforce_scan_quota),
+    session: Session = Depends(get_session)
+):
+    if not user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    if not file.filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip files are supported")
+
+    # Ensure uploads directory exists
+    upload_dir = Path("uploads")
+    upload_dir.mkdir(exist_ok=True)
+    
+    # Save uploaded file with unique name
+    zip_id = str(uuid4())
+    zip_path = upload_dir / f"{zip_id}.zip"
+    
+    try:
+        with zip_path.open("wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not save file: {e}")
+
+    # Create scan record
+    scan = Scan(
+        user_id=user.id,
+        is_local=True,
+        zip_path=str(zip_path.absolute()),
+        status="queued"
+    )
+    session.add(scan)
+    session.commit()
+    session.refresh(scan)
+
+    # Increment monthly scan quota
+    increment_quota_usage(str(user.id), "scan")
+
+    try:
+        enqueue_scan(scan.id, user_id=str(user.id))
+    except Exception as exc:
+        scan.status = "failed"
+        session.add(scan)
+        session.commit()
+        # Clean up zip if enqueuing fails
+        if zip_path.exists():
+            zip_path.unlink()
+        raise HTTPException(status_code=503, detail=f"Scan created but could not be dispatched: {exc}")
+
+    return scan
 
 
 @router.get("/scans", response_model=List[ScanRead])

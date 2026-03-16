@@ -14,7 +14,7 @@ from threading import Lock
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from ..models import Scan, Finding, User
 from ..core.config import Settings
-from ..schemas import ResolutionResponse
+from ..schemas import ResolutionResponse, WorkspaceFix
 from ..core import db
 from .slack_service import SlackService
 from .jira_service import JiraService
@@ -107,10 +107,11 @@ class ResolutionService:
         
         # Determine platform from repo_url
         platform = "github"
-        if "gitlab.com" in scan.repo_url.lower():
-            platform = "gitlab"
-        elif "bitbucket.org" in scan.repo_url.lower():
-            platform = "bitbucket"
+        if scan.repo_url:
+            if "gitlab.com" in scan.repo_url.lower():
+                platform = "gitlab"
+            elif "bitbucket.org" in scan.repo_url.lower():
+                platform = "bitbucket"
         
         raw_payload = github_token # This comes from the API payload (ResolutionRequest)
         raw_db = scan.git_token
@@ -176,32 +177,58 @@ class ResolutionService:
                 # For Git commands, we need to ensure the token is in the netloc
                 clone_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
 
-            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Setting up repository cache: {scan.repo_url}")
-            # Use a persistent cache directory to avoid redundant clones
-            cache_base = Path("/tmp/repos_cache")
-            cache_base.mkdir(parents=True, exist_ok=True)
-            
-            # Create a unique but consistent hash for the repo URL to use as dir name
-            import hashlib
-            repo_hash = hashlib.sha256(scan.repo_url.encode()).hexdigest()[:12]
-            repo_cache_path = cache_base / repo_hash
-            
-            clone_env = os.environ.copy()
-            clone_env["GIT_HTTP_VERSION"] = "1.1"
-            
-            if repo_cache_path.exists() and (repo_cache_path / ".git").exists():
-                try:
-                    logger.debug(f"[{scan.id}] Using cached repository at {repo_cache_path}")
-                    repo = Repo(repo_cache_path)
-                    # Successive runs: fetch latest and reset
-                    origin = repo.remotes.origin
-                    origin.fetch()
-                    repo.git.reset('--hard', f'origin/{repo.active_branch.name}')
-                    # Copy to a fresh temp dir for this specific job to avoid concurrency issues with files
-                    shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
-                    repo = Repo(repo_dir)
-                except Exception as cache_err:
-                    logger.warning(f"[{scan.id}] WARNING: Cache invalid ({cache_err}). Re-cloning.")
+            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Setting up repository: {scan.repo_url or 'Local Workspace'}")
+
+            if scan.is_local:
+                # For local scans, we use the uploaded zip
+                if not scan.zip_path or not os.path.exists(scan.zip_path):
+                    raise Exception(f"Local scan zip file not found at {scan.zip_path}")
+                
+                import zipfile
+                with zipfile.ZipFile(scan.zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(repo_dir)
+                
+                default_branch = "local"
+                branch_name = "local"
+                repo = None # No git repo object for local
+            else:
+                # Use a persistent cache directory to avoid redundant clones
+                cache_base = Path("/tmp/repos_cache")
+                cache_base.mkdir(parents=True, exist_ok=True)
+                
+                # Create a unique but consistent hash for the repo URL to use as dir name
+                import hashlib
+                repo_hash = hashlib.sha256(scan.repo_url.encode()).hexdigest()[:12]
+                repo_cache_path = cache_base / repo_hash
+                
+                clone_env = os.environ.copy()
+                clone_env["GIT_HTTP_VERSION"] = "1.1"
+                
+                if repo_cache_path.exists() and (repo_cache_path / ".git").exists():
+                    try:
+                        logger.debug(f"[{scan.id}] Using cached repository at {repo_cache_path}")
+                        repo = Repo(repo_cache_path)
+                        # Successive runs: fetch latest and reset
+                        origin = repo.remotes.origin
+                        origin.fetch()
+                        repo.git.reset('--hard', f'origin/{repo.active_branch.name}')
+                        # Copy to a fresh temp dir for this specific job to avoid concurrency issues with files
+                        shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
+                        repo = Repo(repo_dir)
+                    except Exception as cache_err:
+                        logger.warning(f"[{scan.id}] WARNING: Cache invalid ({cache_err}). Re-cloning.")
+                        if os.path.exists(repo_cache_path):
+                            shutil.rmtree(repo_cache_path)
+                        
+                        try:
+                            Repo.clone_from(clone_url, repo_cache_path, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
+                            shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
+                            repo = Repo(repo_dir)
+                        except Exception as e2:
+                            logger.warning(f"[{scan.id}] WARNING: Failed to use cache during re-clone ({e2}). Cloning directly.")
+                            repo = Repo.clone_from(clone_url, repo_dir, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
+                else:
+                    logger.debug(f"[{scan.id}] Cache miss or invalid. Cloning repository to {repo_cache_path}")
                     if os.path.exists(repo_cache_path):
                         shutil.rmtree(repo_cache_path)
                     
@@ -209,30 +236,19 @@ class ResolutionService:
                         Repo.clone_from(clone_url, repo_cache_path, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
                         shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
                         repo = Repo(repo_dir)
-                    except Exception as e2:
-                        logger.warning(f"[{scan.id}] WARNING: Failed to use cache during re-clone ({e2}). Cloning directly.")
+                    except Exception as e:
+                        logger.warning(f"[{scan.id}] WARNING: Failed to populate cache ({e}). Cloning directly.")
                         repo = Repo.clone_from(clone_url, repo_dir, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
-            else:
-                logger.debug(f"[{scan.id}] Cache miss or invalid. Cloning repository to {repo_cache_path}")
-                if os.path.exists(repo_cache_path):
-                    shutil.rmtree(repo_cache_path)
-                
-                try:
-                    Repo.clone_from(clone_url, repo_cache_path, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
-                    shutil.copytree(repo_cache_path, repo_dir, dirs_exist_ok=True)
-                    repo = Repo(repo_dir)
-                except Exception as e:
-                    logger.warning(f"[{scan.id}] WARNING: Failed to populate cache ({e}). Cloning directly.")
-                    repo = Repo.clone_from(clone_url, repo_dir, env=clone_env, config='http.postBuffer=524288000', allow_unsafe_options=True)
             
-            # Detect default branch before switching
-            default_branch = repo.active_branch.name
-            logger.debug(f"[{scan.id}] Detected default branch: {default_branch}")
+            if not scan.is_local:
+                # Detect default branch before switching
+                default_branch = repo.active_branch.name
+                logger.debug(f"[{scan.id}] Detected default branch: {default_branch}")
 
-            branch_name = f"fix/scan-{str(scan.id)[:8]}-{int(time.time())}"
-            new_branch = repo.create_head(branch_name)
-            new_branch.checkout()
-            logger.debug(f"[{scan.id}] Checked out branch: {branch_name}")
+                branch_name = f"fix/scan-{str(scan.id)[:8]}-{int(time.time())}"
+                new_branch = repo.create_head(branch_name)
+                new_branch.checkout()
+                logger.debug(f"[{scan.id}] Checked out branch: {branch_name}")
 
             # Optimization: Group findings by file to minimize I/O and allow parallel processing across files
             files_to_findings = {}
@@ -311,8 +327,9 @@ class ResolutionService:
                     try:
                         file_results = future.result()
                         if file_results:
-                            # Use lstrip to ensure GitPython doesn't see an absolute path
-                            repo.index.add([file_path.lstrip("/")])
+                            if not scan.is_local:
+                                # Use lstrip to ensure GitPython doesn't see an absolute path
+                                repo.index.add([file_path.lstrip("/")])
                             applied_findings.extend(file_results)
                             resolved_count += len(file_results)
                     except Exception as e:
@@ -338,8 +355,9 @@ class ResolutionService:
                     if new_content and new_content != content:
                         with open(file_path, "w") as f_handle:
                             f_handle.write(new_content)
-                        # Normalize path for Git staging
-                        repo.index.add([clean_path])
+                        if not scan.is_local:
+                            # Normalize path for Git staging
+                            repo.index.add([clean_path])
                         applied_findings.append(f)
                         resolved_count += 1
                 
@@ -351,54 +369,61 @@ class ResolutionService:
 
             logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Resolved {resolved_count} findings. Preparing to commit and push.")
 
-            if not token:
-                logger.critical(f"[{scan.id}] FATAL: Ready to push but still have NO token. Token source was: {token_source}")
-                return ResolutionResponse(status="failed", finding_id=scan.id, message="Authentication required for push. No GITHUB_TOKEN or scan.git_token found.")
+            pr_url = None
+            if not scan.is_local:
+                if not token:
+                    logger.critical(f"[{scan.id}] FATAL: Ready to push but still have NO token. Token source was: {token_source}")
+                    return ResolutionResponse(status="failed", finding_id=scan.id, message="Authentication required for push. No GITHUB_TOKEN or scan.git_token found.")
 
-            # Configure Git user for the worker
-            with repo.config_writer() as cw:
-                cw.set_value("user", "name", "Security Platform Worker")
-                cw.set_value("user", "email", "worker@security-platform.local")
+                # Configure Git user for the worker
+                with repo.config_writer() as cw:
+                    cw.set_value("user", "name", "Security Platform Worker")
+                    cw.set_value("user", "email", "worker@security-platform.local")
 
-            # Unified commit
-            commit_msg = f"Security Fixes for Scan {str(scan.id)[:8]}\n\nResolved {resolved_count} findings:\n"
-            for f in applied_findings:
-                commit_msg += f"- {f.title} in {f.file_path}\n"
-            
-            repo.index.commit(commit_msg)
-            
-            # Push
-            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Pushing {branch_name} to origin...")
-            origin = repo.remote(name='origin')
-            
-            # Ensure the origin URL has the token for push if not already present
-            if token and isinstance(origin.url, str) and "@" not in origin.url:
-                from urllib.parse import urlparse, urlunparse
-                parsed = urlparse(origin.url)
-                auth_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
-                origin.set_url(auth_url)
-                logger.debug(f"[{scan.id}] DEBUG: Updated remote URL for authenticated push.")
+                # Unified commit
+                commit_msg = f"Security Fixes for Scan {str(scan.id)[:8]}\n\nResolved {resolved_count} findings:\n"
+                for f in applied_findings:
+                    commit_msg += f"- {f.title} in {f.file_path}\n"
+                
+                repo.index.commit(commit_msg)
+                
+                # Push
+                logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Pushing {branch_name} to origin...")
+                origin = repo.remote(name='origin')
+                
+                # Ensure the origin URL has the token for push if not already present
+                if token and isinstance(origin.url, str) and "@" not in origin.url:
+                    from urllib.parse import urlparse, urlunparse
+                    parsed = urlparse(origin.url)
+                    auth_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
+                    origin.set_url(auth_url)
+                    logger.debug(f"[{scan.id}] DEBUG: Updated remote URL for authenticated push.")
 
-            origin.push(branch_name)
-            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Pushed {branch_name} to origin successfully.")
+                origin.push(branch_name)
+                logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Pushed {branch_name} to origin successfully.")
 
-            # Create PR representing the whole scan (passing all applied findings list)
-            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Attempting to create PR for {resolved_count} fixes on base branch {default_branch}...")
-            pr_url = self._create_pull_request(
-                scan.repo_url, 
-                branch_name, 
-                applied_findings, 
-                token, 
-                is_bundled=True, 
-                count=resolved_count,
-                base_branch=default_branch,
-                user=user
-            )
-            
-            if pr_url:
-                logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Successfully created PR: {pr_url}")
+                # Create PR representing the whole scan (passing all applied findings list)
+                logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Attempting to create PR for {resolved_count} fixes on base branch {default_branch}...")
+                pr_url = self._create_pull_request(
+                    scan.repo_url, 
+                    branch_name, 
+                    applied_findings, 
+                    token, 
+                    is_bundled=True, 
+                    count=resolved_count,
+                    base_branch=default_branch,
+                    user=user
+                )
+                
+                if pr_url:
+                    logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Successfully created PR: {pr_url}")
+                else:
+                    logger.error(f"[{scan.id}] ERROR: PR creation failed or returned None.")
             else:
-                logger.error(f"[{scan.id}] ERROR: PR creation failed or returned None.")
+                logger.info(f"[{scan.id}] Local scan: Fixes generated successfully in temporary workspace.")
+                # We could potentially zip it back or just mark it as fixed.
+                # Since the user doesn't have a way to download yet, we just mark it as fixed.
+                pr_url = "local-fix-applied"
 
             # Mark all applied findings as fixed
             for f in applied_findings:
@@ -406,6 +431,20 @@ class ResolutionService:
                 f.pr_url = pr_url
                 self.session.add(f)
             self.session.commit()
+
+            # Prepare fixes for local workspace application if it's a local scan
+            fixes = []
+            if scan.is_local:
+                modified_files = {f.file_path for f in applied_findings}
+                for fp in modified_files:
+                    clean_path = fp.lstrip("/")
+                    full_path = repo_path / clean_path
+                    if full_path.exists():
+                        try:
+                            with open(full_path, "r") as f_handle:
+                                fixes.append(WorkspaceFix(file_path=fp, new_content=f_handle.read()))
+                        except Exception as read_err:
+                            logger.error(f"[{scan.id}] Failed to read fixed file {fp}: {read_err}")
 
             logger.info(f"[{scan.id}] STATUS: COMPLETED - {resolved_count} fixes applied. PR: {pr_url}")
 
@@ -418,7 +457,7 @@ class ResolutionService:
                     logger.error(f"[{scan.id}] Failed to record resolution usage: {e}")
 
             # Email user the PR link (and Jira link if configured)
-            if pr_url and user and getattr(user, "email", None):
+            if pr_url and pr_url != "local-fix-applied" and user and getattr(user, "email", None):
                 try:
                     from .email import send_resolution_email
                     highest_severity = applied_findings[0].severity if applied_findings else ""
@@ -439,7 +478,8 @@ class ResolutionService:
                 status="success",
                 pr_url=pr_url,
                 finding_id=scan.id,
-                message=f"Created single PR with {resolved_count} fixes: {pr_url}" if pr_url else f"Pushed {resolved_count} fixes to branch {branch_name}, but PR creation failed."
+                message=f"Created single PR with {resolved_count} fixes: {pr_url}" if pr_url and pr_url != "local-fix-applied" else f"Generated {resolved_count} fixes for your local workspace." if scan.is_local else f"Pushed {resolved_count} fixes to branch {branch_name}, but PR creation failed.",
+                fixes=fixes if fixes else None
             )
 
         except Exception as e:

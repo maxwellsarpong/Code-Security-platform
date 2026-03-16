@@ -10,6 +10,7 @@ services:
     volumes:
       - ./src:/app/src:cached
       - ./.data:/data
+      - uploads:/app/uploads
     env_file: .env
 
   redis:
@@ -41,6 +42,7 @@ services:
     volumes:
       - ./src:/app/src:cached
       - ./.data:/data
+      - uploads:/app/uploads
     env_file: .env
 
   db:
@@ -54,3 +56,4 @@ services:
 
 volumes:
   pgdata:
+  uploads:

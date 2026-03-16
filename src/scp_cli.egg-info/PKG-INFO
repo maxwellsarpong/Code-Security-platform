@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: scp-cli
-Version: 0.1.10
+Version: 0.1.12
 Summary: Security Compliance Platform CLI - Secure your code from the terminal.
 Author-email: Maxwell Sarpong <maxwell@example.com>
 Classifier: Programming Language :: Python :: 3

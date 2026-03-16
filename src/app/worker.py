@@ -96,6 +96,12 @@ if __name__ == "__main__":
     # Wait for Redis to be ready (handles cold-start race on Render)
     conn = _wait_for_redis(redis_url, retries=10, delay=3)
 
+    # ── Database Migrations ──
+    # Ensure worker has an up-to-date schema before processing jobs
+    from .core.db import init_db
+    logger.info("Running database migrations...")
+    init_db()
+
     queues = ["emails", "scans", "resolutions"]
     logger.info(f"Listening on queues: {queues}")
     logger.info("Worker ready. Waiting for jobs...")

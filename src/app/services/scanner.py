@@ -372,20 +372,30 @@ def _prune_old_scan_data(session: Session, hours: int = 2):
     try:
         from sqlalchemy import text
         import datetime
+        from sqlalchemy.exc import ProgrammingError
         
         # Calculate retention threshold
         threshold = datetime.datetime.utcnow() - datetime.timedelta(hours=hours)
         
-        # Find local scans with binary data that are older than the threshold
-        # We use raw SQL for performance and to ensure LargeBinary nullification
+        # Use raw SQL for the cleanup task
         stmt = text("UPDATE scan SET zip_data = NULL WHERE is_local = TRUE AND created_at < :threshold AND zip_data IS NOT NULL")
-        result = session.execute(stmt, {"threshold": threshold})
-        session.commit()
         
-        if result.rowcount > 0:
-            logger.info(f"[Maintenance] Pruned binary data for {result.rowcount} old scan(s) (older than {hours}h).")
+        try:
+            result = session.execute(stmt, {"threshold": threshold})
+            session.commit()
+            
+            if result.rowcount > 0:
+                logger.info(f"[Maintenance] Pruned binary data for {result.rowcount} old scan(s) (older than {hours}h).")
+        except ProgrammingError as e:
+            # This handles cases where the column might not exist yet (e.g. migration hasn't completed)
+            session.rollback()
+            logger.warning(f"[Maintenance] Skipping pruning (column may not exist yet): {e}")
+        except Exception as e:
+            session.rollback()
+            logger.error(f"[Maintenance] Error during pruning: {e}")
+            
     except Exception as e:
-        logger.error(f"[Maintenance] Failed to prune old scan data: {e}")
+        logger.error(f"[Maintenance] Pruning setup failed: {e}")
 
 
 

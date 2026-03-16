@@ -261,6 +261,7 @@ def resolve(
     # Always request synchronous resolution from the CLI for immediate feedback
     params = {"force_sync": "true"}
 
+    data = None
     with Progress(SpinnerColumn(), transient=True) as progress:
         description = "Processing resolution..."
         if is_local_scan:
@@ -272,52 +273,60 @@ def resolve(
         try:
             # Increase timeout to 180s to allow for AI generation + Git operations
             response = requests.post(url, json=payload, headers=headers, params=params, timeout=180)
+            if response.status_code != 200:
+                try:
+                    detail = response.json().get('detail', 'Unknown error')
+                except:
+                    detail = response.text
+                console.print(f"[bold red]Failed:[/bold red] {detail}")
+                return
             data = response.json()
-            
-            if response.status_code == 200:
-                pr_url = data.get("pr_url")
-                message = data.get("message")
-                
-                output_content = f"[bold green]Status:[/bold green] {data['status']}\n"
-                output_content += f"[bold white]Message:[/bold white] {message}"
-                
-                if pr_url and pr_url != "local-fix-applied":
-                    output_content += f"\n[bold cyan]Pull Request:[/bold cyan] [link={pr_url}]{pr_url}[/link]"
-
-                console.print(Panel(
-                    output_content,
-                    title="Resolution Success"
-                ))
-                
-                # Handle local fixes if present
-                fixes = data.get("fixes")
-                if fixes:
-                    console.print(f"\n[bold cyan]Detected {len(fixes)} local workspace fixes.[/bold cyan]")
-                    if typer.confirm("Would you like to apply these fixes to your local workspace now?"):
-                        for fix in fixes:
-                            file_path = fix["file_path"]
-                            new_content = fix["new_content"]
-                            
-                            local_file = Path(file_path.lstrip("/"))
-                            if local_file.exists():
-                                backup = local_file.with_suffix(local_file.suffix + ".bak")
-                                shutil.copy2(local_file, backup)
-                                console.print(f"  [dim]Backup created: {backup.name}[/dim]")
-                            
-                            local_file.parent.mkdir(parents=True, exist_ok=True)
-                            with open(local_file, "w") as f:
-                                f.write(new_content)
-                            console.print(f"  [bold green]✓ Applied fix to {file_path}[/bold green]")
-                        
-                        console.print("\n[bold green]Workspace fixes applied successfully![/bold green]")
-                        console.print("[dim]Please review the changes and run your tests.[/dim]")
-            else:
-                console.print(f"[bold red]Failed:[/bold red] {data.get('detail', 'Unknown error')}")
         except requests.exceptions.Timeout:
             console.print("[bold red]Error:[/bold red] The request timed out. The resolution might still be running in the background.")
             console.print("[dim]You can check the status later using 'scp-cli status' or 'scp-cli pr'.[/dim]")
+            return
         except Exception as e:
             console.print(f"[bold red]Error:[/bold red] {e}")
+            return
+
+    if data:
+        pr_url = data.get("pr_url")
+        message = data.get("message")
+        
+        output_content = f"[bold green]Status:[/bold green] {data.get('status', 'success')}\n"
+        output_content += f"[bold white]Message:[/bold white] {message}"
+        
+        if pr_url and pr_url != "local-fix-applied":
+            output_content += f"\n[bold cyan]Pull Request:[/bold cyan] [link={pr_url}]{pr_url}[/link]"
+
+        console.print(Panel(
+            output_content,
+            title="Resolution Success"
+        ))
+        
+        # Handle local fixes if present
+        fixes = data.get("fixes")
+        if fixes:
+            console.print(f"\n[bold cyan]Detected {len(fixes)} local workspace fixes.[/bold cyan]")
+            if typer.confirm("Would you like to apply these fixes to your local workspace now?"):
+                for fix in fixes:
+                    file_path = fix["file_path"]
+                    new_content = fix["new_content"]
+                    
+                    # Ensure path is relative to current directory for application
+                    local_file = Path(file_path.lstrip("/"))
+                    if local_file.exists():
+                        backup = local_file.with_suffix(local_file.suffix + ".bak")
+                        shutil.copy2(local_file, backup)
+                        console.print(f"  [dim]Backup created: {backup.name}[/dim]")
+                    
+                    local_file.parent.mkdir(parents=True, exist_ok=True)
+                    with open(local_file, "w") as f:
+                        f.write(new_content)
+                    console.print(f"  [bold green]✓ Applied fix to {file_path}[/bold green]")
+                
+                console.print("\n[bold green]Workspace fixes applied successfully![/bold green]")
+                console.print("[dim]Please review the changes and run your tests.[/dim]")
 
 @app.command()
 def resolved():

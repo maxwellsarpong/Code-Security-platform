@@ -48,7 +48,7 @@ class ResolutionService:
                 logger.debug(f"DEBUG: Found finding {finding.id} via targeted lookup.")
 
         if finding:
-            if finding.is_fixed:
+            if finding.is_fixed and not force_sync:
                 return ResolutionResponse(
                     status="success",
                     finding_id=finding_id,
@@ -170,17 +170,10 @@ class ResolutionService:
         
         try:
             repo_path = Path(repo_dir)
-            clone_url = scan.repo_url
-            if token:
-                from urllib.parse import urlparse, urlunparse
-                parsed = urlparse(scan.repo_url)
-                # For Git commands, we need to ensure the token is in the netloc
-                clone_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
-
-            logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Setting up repository: {scan.repo_url or 'Local Workspace'}")
 
             if scan.is_local:
                 # For local scans, we use the uploaded zip content from the database
+                logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Setting up local repository: Local Workspace")
                 if not scan.zip_data:
                     logger.warning(f"[{scan.id}] FAILED: Local scan zip data is missing (likely pruned for storage).")
                     raise Exception(
@@ -198,6 +191,10 @@ class ResolutionService:
                 try:
                     with zipfile.ZipFile(tmp_zip_path, 'r') as zip_ref:
                         zip_ref.extractall(repo_dir)
+                    
+                    # Diagnostic: Log extracted files
+                    extracted_files = [str(p.relative_to(repo_path)) for p in repo_path.rglob("*") if p.is_file()]
+                    logger.debug(f"[{scan.id}] Extracted {len(extracted_files)} files into workspace: {extracted_files[:10]}...")
                 finally:
                     # Clean up temporary zip on the worker's disk
                     if os.path.exists(tmp_zip_path):
@@ -207,6 +204,14 @@ class ResolutionService:
                 branch_name = "local"
                 repo = None # No git repo object for local
             else:
+                clone_url = scan.repo_url
+                if token and scan.repo_url:
+                    from urllib.parse import urlparse, urlunparse
+                    parsed = urlparse(scan.repo_url)
+                    # For Git commands, we need to ensure the token is in the netloc
+                    clone_url = urlunparse(parsed._replace(netloc=f"{token}@{parsed.netloc}"))
+
+                logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Setting up remote repository: {scan.repo_url}")
                 # Use a persistent cache directory to avoid redundant clones
                 cache_base = Path("/tmp/repos_cache")
                 cache_base.mkdir(parents=True, exist_ok=True)
@@ -559,7 +564,7 @@ class ResolutionService:
                             return fixed_content
 
             # 5. Handle hardcoded password strings (Bandit B105) or Django Secret Key
-            if finding.title and any(kw in finding.title.lower() for kw in ["hardcoded_password", "secret_key"]):
+            if finding.title and any(kw in finding.title.lower() for kw in ["hardcoded", "secret_key"]):
                  import re
                  # Look for assignment like password = "..." or SECRET_KEY = '...'
                  # Improved pattern to catch both password-like and SECRET_KEY variables
@@ -659,7 +664,7 @@ class ResolutionService:
                          return fixed_content
 
             # 17. Handle hardcoded_sql_expressions / Sqlalchemy Execute Raw Query / CWE-89 / SQL Injection
-            if finding.title and any(x in finding.title.upper() for x in ["HARDCODED_SQL", "RAW QUERY", "EXECUTE", "CWE-89", "SQL INJECTION"]):
+            if finding.title and any(x in finding.title.upper() for x in ["HARDCODED", "RAW QUERY", "EXECUTE", "CWE-89", "SQL INJECTION", "QUERY"]):
                  if ".execute(" in content:
                      import re
                      lines = content.splitlines()
@@ -734,10 +739,18 @@ class ResolutionService:
                 {content}
                 """
                 
-                response = client.models.generate_content(
-                    model='gemini-3-flash-preview',
-                    contents=prompt,
-                )
+                # Model selection: use 2.0-flash-exp for speed and quality, fallback to 1.5-flash
+                try:
+                    response = client.models.generate_content(
+                        model='gemini-2.0-flash-exp',
+                        contents=prompt,
+                    )
+                except Exception as model_err:
+                    logger.warning(f"[{finding.id}] gemini-2.0-flash-exp failed, falling back to 1.5-flash: {model_err}")
+                    response = client.models.generate_content(
+                        model='gemini-1.5-flash',
+                        contents=prompt,
+                    )
                 
                 fixed_code = response.text.strip()
                 if fixed_code.startswith("```"):
@@ -748,10 +761,13 @@ class ResolutionService:
                 if fixed_code and fixed_code != content:
                     logger.info(f"[{finding.id}] Gemini AI successfully generated a fix")
                     return fixed_code
+                else:
+                    logger.warning(f"[{finding.id}] Gemini AI returned content identical to original or empty.")
                     
             except Exception as e:
                 logger.error(f"[{finding.id}] ERROR in Gemini AI fallback: {e}")
 
+        logger.warning(f"[{finding.id}] Resolution failed: No rule matched and Gemini AI was unavailable or failed.")
         return None
 
     def _fix_dependency(self, content: str, finding: Finding) -> Optional[str]:

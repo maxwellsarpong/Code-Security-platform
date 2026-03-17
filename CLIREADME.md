@@ -67,6 +67,11 @@ scp-cli scan .
 # Check scan status (summarized results)
 scp-cli status <scan_id>
 
+# CI/CD: Wait for scan completion and verify results
+# --fail: Exit with code 1 if matches are found
+# --severity: Minimum severity (LOW, MEDIUM, HIGH, CRITICAL)
+scp-cli check <scan_id> --severity HIGH --fail
+
 # List all security issues for a scan (get Finding IDs)
 scp-cli findings <scan_id>
 
@@ -83,4 +88,7 @@ scp-cli pr <finding_id>
 
 # Check your quota
 scp-cli usage
+
+# Check current authentication status
+scp-cli whoami
 ```

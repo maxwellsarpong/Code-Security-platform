@@ -2,6 +2,7 @@ import typer
 import requests
 import json
 import os
+import time
 import tempfile
 import zipfile
 from pathlib import Path
@@ -422,6 +423,88 @@ def pr(
                 console.print(f"[bold red]Error:[/bold red] {e.response.text}")
         else:
             console.print(f"[bold red]Error:[/bold red] {e}")
+
+@app.command()
+def check(
+    scan_id: str = typer.Argument(..., help="The UUID of the scan to verify"),
+    fail: bool = typer.Option(False, "--fail", help="Exit with non-zero code if vulnerabilities are found"),
+    severity: str = typer.Option("HIGH", "--severity", help="Minimum severity threshold (LOW, MEDIUM, HIGH, CRITICAL)")
+):
+    """
+    CI/CD Pipeline Check: Wait for scan completion and verify results.
+    Exits with code 1 if vulnerabilities matching the threshold are found and --fail is set.
+    """
+    url = get_url(f"/scans/{scan_id}")
+    headers = get_headers()
+    
+    severity_order = {"LOW": 0, "MEDIUM": 1, "HIGH": 2, "CRITICAL": 3}
+    threshold = severity.upper()
+    if threshold not in severity_order:
+        console.print(f"[bold red]Error:[/bold red] Invalid severity '{severity}'. Use LOW, MEDIUM, HIGH, or CRITICAL.")
+        raise typer.Exit(code=1)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        transient=True,
+    ) as progress:
+        task = progress.add_task(description="Waiting for scan to complete...", total=None)
+        
+        while True:
+            try:
+                response = requests.get(url, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+                status = data.get("status", "unknown")
+                
+                if status in ("completed", "failed", "error"):
+                    break
+                
+                progress.update(task, description=f"Scan {scan_id} is [bold cyan]{status}[/bold cyan]. Waiting...")
+                time.sleep(5)
+            except Exception as e:
+                console.print(f"[bold red]Error fetching status:[/bold red] {e}")
+                raise typer.Exit(code=1)
+
+    # Scan is done, process findings
+    findings_list = data.get("findings", [])
+    relevant_findings = [
+        f for f in findings_list 
+        if severity_order.get(f.get("severity", "LOW").upper(), 0) >= severity_order[threshold]
+        and not f.get("is_fixed", False)
+    ]
+
+    if not relevant_findings:
+        console.print(Panel(
+            f"Scan Status: [bold green]{data['status']}[/bold green]\n"
+            f"No open findings found at or above [bold yellow]{threshold}[/bold yellow] severity.",
+            title="Scan Pass"
+        ))
+        raise typer.Exit(code=0)
+
+    # Findings exist
+    table = Table(title=f"Open Findings (>= {threshold}) for Scan: {scan_id}")
+    table.add_column("ID", style="cyan")
+    table.add_column("Severity", style="red")
+    table.add_column("Title", style="white")
+    table.add_column("File Path", style="yellow")
+
+    for f in relevant_findings:
+        table.add_row(
+            f["id"],
+            f.get("severity", "N/A"),
+            f.get("title", "Unknown"),
+            f"{f.get('file_path', 'N/A')}:{f.get('line_number', '')}" if f.get("line_number") else f.get("file_path", "N/A")
+        )
+    
+    console.print(table)
+    
+    if fail:
+        console.print(f"\n[bold red]FAILURE:[/bold red] Found {len(relevant_findings)} open vulnerabilities. Failing pipeline as requested.")
+        raise typer.Exit(code=1)
+    else:
+        console.print(f"\n[bold yellow]WARNING:[/bold yellow] Found {len(relevant_findings)} open vulnerabilities. (Exiting with 0 because --fail was not set)")
+        raise typer.Exit(code=0)
 
 @app.command()
 def usage():

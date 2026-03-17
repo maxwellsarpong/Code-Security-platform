@@ -286,6 +286,7 @@ class ResolutionService:
                 clean_path = file_path.lstrip("/")
                 current_file_path = repo_path / clean_path
                 if not current_file_path.exists():
+                    logger.warning(f"[{scan.id}] File not found in workspace: {clean_path}. Skipping {len(findings_list)} findings.")
                     return results
 
                 with open(current_file_path, "r") as f:
@@ -293,42 +294,16 @@ class ResolutionService:
 
                 modified = False
                 
-                # If there's only one finding, no need for extra overhead
-                if len(findings_list) == 1:
-                    finding = findings_list[0]
-                    new_content = self._generate_fix(finding, repo_path, content=content)
-                    if new_content and new_content != content:
-                        content = new_content
-                        modified = True
-                        results.append(finding)
-                else:
-                    # Parallelize the AI generation for all findings in this file
-                    # Note: We apply them sequentially to the 'content' string to ensure
-                    # each subsequent fix sees the results of the previous one (to avoid conflicts)
-                    # However, the AI calls themselves are parallelized.
-                    with ThreadPoolExecutor(max_workers=len(findings_list)) as file_executor:
-                        future_to_finding = {
-                            file_executor.submit(self._generate_fix, finding, repo_path, content=content): finding 
-                            for finding in findings_list
-                        }
-                        
-                        for future in as_completed(future_to_finding):
-                            finding = future_to_finding[future]
-                            try:
-                                # This is a bit naive because multiple independent fixes might not
-                                # be easy to 'merge' into one file string if they overlap.
-                                # But usually, they are on different lines.
-                                new_content = future.result()
-                                if new_content and new_content != content:
-                                    # Very basic 'merge': if the fix is just a line change, it might work.
-                                    # For now, we'll just apply the first one that returns and then
-                                    # re-evaluate if we need a more robust merge.
-                                    # Better: apply fixes to the original content one by one.
-                                    content = new_content
-                                    modified = True
-                                    results.append(finding)
-                            except Exception as e:
-                                logger.error(f"[{scan.id}] ERROR in parallel file fix: {e}")
+                # Apply all findings for this file sequentially
+                for finding in findings_list:
+                    try:
+                        new_content = self._generate_fix(finding, repo_path, content=content)
+                        if new_content and new_content != content:
+                            content = new_content
+                            modified = True
+                            results.append(finding)
+                    except Exception as e:
+                        logger.error(f"[{scan.id}] ERROR in file fix for finding {finding.id}: {e}")
                 
                 if modified:
                     with open(current_file_path, "w") as f:
@@ -363,6 +338,7 @@ class ResolutionService:
                     clean_path = f.file_path.lstrip("/")
                     file_path = repo_path / clean_path
                     if not file_path.exists():
+                        logger.warning(f"[{scan.id}] Local fix failed: File {clean_path} not found in workspace for AI fallback.")
                         continue
                         
                     with open(file_path, "r") as f_handle:
@@ -382,8 +358,8 @@ class ResolutionService:
                         resolved_count += 1
                 
                 if resolved_count == 0:
-                    logger.error(f"[{scan.id}] STATUS: FAILED - Batch-level AI fallback also failed to generate any fixes.")
-                    return ResolutionResponse(status="failed", finding_id=scan.id, message="Could not generate fixes for any findings in this scan (even with AI fallback).")
+                    logger.error(f"[{scan.id}] STATUS: FAILED - Batch-level AI fallback also failed to generate any fixes. Check if GEMINI_API_KEY is valid.")
+                    return ResolutionResponse(status="failed", finding_id=scan.id, message="Could not generate fixes for any findings. This can happen if the AI model fails or if the detected issues cannot be automatically resolved. Ensure GEMINI_API_KEY is set in your environment.")
                 else:
                     logger.info(f"[{scan.id}] STATUS: IN_PROGRESS - Batch-level AI successfully resolved {resolved_count} findings.")
 
@@ -702,13 +678,19 @@ class ResolutionService:
                                  return "\n".join(lines) + "\n"
                              return None
 
-            logger.debug(f"[{finding.id}] No deterministic rule found for finding: {finding.title}")
+            if result:
+                 logger.info(f"[{finding.id}] Deterministic rule hit for finding: {finding.title}")
+                 return result
+            
+            logger.info(f"[{finding.id}] No deterministic rule found for finding: {finding.title}")
         
         # Step 2: Gemini AI Fallback
         gemini_key = os.getenv("GEMINI_API_KEY", settings.gemini_api_key)
             
         if gemini_key:
             try:
+                masked_key = f"{gemini_key[:4]}...{gemini_key[-4:]}" if len(gemini_key) > 8 else "****"
+                logger.info(f"[{finding.id}] Gemini API Key found: {masked_key}")
                 from google import genai
                 mode_str = " (BATCH FORCE)" if force_ai else ""
                 logger.debug(f"[{finding.id}] DEBUG: Gemini API Key found. Attempting AI resolution for finding{mode_str}.")
@@ -732,23 +714,29 @@ class ResolutionService:
                     prompt += f"Suggested Remediation / Hint: {finding.remediation}\n"
 
                 prompt += f"""
-                Rewrite the following code file to fix the vulnerability. 
-                Return ONLY the raw fixed code. Do not include markdown code blocks (like ```python) and do not provide any explanation.
+                Rewrite the following code file to fix the security vulnerability described above. 
                 
-                Code:
+                CRITICAL INSTRUCTIONS:
+                - Return ONLY the raw fixed code.
+                - Do NOT include markdown code blocks (like ```python).
+                - Do NOT include any explanations or backticks.
+                - If the vulnerability is in a specific line, fix that line while keeping the rest of the file intact.
+                - Use best security practices (e.g., parameterization, escaping, using secure libraries).
+                
+                Code to fix:
                 {content}
                 """
                 
-                # Model selection: use 2.0-flash-exp for speed and quality, fallback to 1.5-flash
+                # Model selection: use gemini-2.5-flash-lite as primary, gemini-3-flash-preview as fallback
                 try:
                     response = client.models.generate_content(
-                        model='gemini-2.0-flash-exp',
+                        model='gemini-2.5-flash-lite',
                         contents=prompt,
                     )
                 except Exception as model_err:
-                    logger.warning(f"[{finding.id}] gemini-2.0-flash-exp failed, falling back to 1.5-flash: {model_err}")
+                    logger.warning(f"[{finding.id}] gemini-2.5-flash-lite failed, falling back to gemini-3-flash-preview: {model_err}")
                     response = client.models.generate_content(
-                        model='gemini-1.5-flash',
+                        model='gemini-3-flash-preview',
                         contents=prompt,
                     )
                 
@@ -759,13 +747,16 @@ class ResolutionService:
                         fixed_code = "\n".join(lines[1:-1])
                         
                 if fixed_code and fixed_code != content:
-                    logger.info(f"[{finding.id}] Gemini AI successfully generated a fix")
+                    logger.info(f"[{finding.id}] Gemini AI successfully generated a fix (Len: {len(fixed_code)})")
                     return fixed_code
                 else:
-                    logger.warning(f"[{finding.id}] Gemini AI returned content identical to original or empty.")
+                    logger.warning(f"[{finding.id}] Gemini AI returned content identical to original or empty (Len: {len(fixed_code) if fixed_code else 0}).")
                     
             except Exception as e:
-                logger.error(f"[{finding.id}] ERROR in Gemini AI fallback: {e}")
+                logger.error(f"[{finding.id}] ERROR in Gemini AI fallback: {str(e)}", exc_info=True)
+
+        else:
+            logger.warning(f"[{finding.id}] Gemini AI resolution skipped: No GEMINI_API_KEY found in environment or settings.")
 
         logger.warning(f"[{finding.id}] Resolution failed: No rule matched and Gemini AI was unavailable or failed.")
         return None

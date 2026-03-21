@@ -36,7 +36,13 @@ The platform includes a powerful CLI script to trigger scans and resolutions dir
 
 #### 1. Installation
 
-**Recommended: Using uv (Isolated)**
+**Recommended: Quick Install (curl)**
+```bash
+curl -sSL https://raw.githubusercontent.com/maxwellsarpong/Code-Security-platform/main/install.sh | bash
+```
+```
+
+**Using uv (Isolated)**
 ```bash
 uv tool install scp-cli
 ```

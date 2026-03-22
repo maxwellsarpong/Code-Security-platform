@@ -18,7 +18,8 @@ from app import __version__
 
 app = typer.Typer(
     help="Security Compliance Platform CLI - Secure your code from the terminal.",
-    add_completion=False
+    add_completion=False,
+    context_settings={"help_option_names": ["-h", "--help"]}
 )
 console = Console()
 
@@ -122,6 +123,9 @@ def scan(
                     with open(tmp_path, "rb") as f:
                         files = {"file": (f"{local_path.name}.zip", f, "application/zip")}
                         response = requests.post(url, files=files, headers=headers)
+                        if response.status_code == 403:
+                            console.print("[bold red]Error:[/bold red] Free trial limit exceeded. Please upgrade to a paid plan.")
+                            raise typer.Exit(code=1)
                         response.raise_for_status()
                         data = response.json()
                 finally:
@@ -137,6 +141,9 @@ def scan(
                 if token:
                     payload["github_token"] = token
                 response = requests.post(url, json=payload, headers=headers)
+                if response.status_code == 403:
+                    console.print("[bold red]Error:[/bold red] Free trial limit exceeded. Please upgrade to a paid plan.")
+                    raise typer.Exit(code=1)
                 response.raise_for_status()
                 data = response.json()
                 label = repo_url
@@ -547,4 +554,4 @@ def whoami():
         console.print(f"[bold red]Authentication Error:[/bold red] {e}")
 
 if __name__ == "__main__":
-    app()
+    app(prog_name="scp-cli")

@@ -28,7 +28,7 @@ class ResolutionService:
 
     def __init__(self, session: Session):
         self.session = session
-        logger.info("!!! RESOLUTION SERVICE VERSION 6.0 - MULTI-TENANT !!!")
+        logger.info("!!! RESOLUTION SERVICE VERSION 1.0 !!!")
 
     def resolve_finding(self, finding_id: UUID, github_token: Optional[str] = None, force_sync: bool = False) -> ResolutionResponse:
         search_id = str(finding_id).replace("-", "")

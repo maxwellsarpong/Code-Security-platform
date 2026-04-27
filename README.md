@@ -137,20 +137,40 @@ curl https://code-security-platform.onrender.com/api/v1/scans \
 
 Every user is assigned a plan that controls their monthly scan and resolution limits.
 
-| Plan | Monthly Scans | Monthly Resolves |
-|---|---|---|
-| `free` | 2 | 2 |
-| `team` | 500 | 500 |
-| `enterprise` | 2000 | 2000 |
+| Plan | Monthly Scans | Monthly Resolves | Description |
+|---|---|---|---|
+| `starter` | 2 | 2 | Default free tier for new users |
+| `team` | 500 | 500 | For growing security teams |
+| `enterprise` | 2000 | 2000 | High-volume automated environments |
 
-- New users are automatically placed on the **Free** plan.
-- Check your current plan and quotas at `GET /api/v1/user/profile`.
-- Check current-month usage at `GET /api/v1/user/usage`.
-- When a quota is exceeded the API returns `403` with a descriptive message indicating which quota was hit and that an upgrade is required.
-- **Upgrade/Transition Plans**:
-  - `POST /api/v1/user/subscription/team`: Move to the **Team** tier.
-  - `POST /api/v1/user/subscription/enterprise`: Move to the **Enterprise** tier.
-- Renew / reset your current monthly quotas with `POST /api/v1/user/subscription/renew`.
+- **Naming Note**: The free tier is referred to as `starter` in API responses and CLI outputs.
+- **Additive Quotas**: Upgrading your plan adds the new plan's baseline quota to your current balance. For example, moving from **Starter** to **Team** gives you **502** monthly scans.
+- **Monitoring**: 
+  - Check current plan/limits: `GET /api/v1/user/profile`
+  - Check real-time usage: `GET /api/v1/user/usage`
+- **Exceeding Quotas**: If a limit is hit, the API returns `403 Forbidden` with details on which quota requires an upgrade.
+
+---
+
+### Upgrading to the Team Plan 🚀
+
+The **Team Plan** is designed for active development teams that need frequent security scanning and automated remediation.
+
+#### Why Upgrade?
+- **Increased Capacity**: 500 scans and 500 resolutions per month.
+- **Additive Bonus**: Your existing credits are preserved and added to the new tier.
+- **Immediate Activation**: Upgrades take effect instantly upon request.
+
+#### How to Upgrade
+You can upgrade your account instantly via a `POST` request using your authentication token:
+
+```bash
+# Upgrade via cURL
+curl -X POST https://code-security-platform.onrender.com/api/v1/user/subscription/team \
+     -H "Authorization: Bearer <YOUR_JWT_TOKEN>"
+```
+
+*For Enterprise upgrades, use the `/api/v1/user/subscription/enterprise` endpoint.*
 
 ---
 
@@ -240,6 +260,8 @@ curl -X POST https://code-security-platform.onrender.com/api/v1/user/subscriptio
 |--------|----------|---------------|-------------|
 | `GET` | `/api/v1/admin/users` | ✅ (superuser) | List all registered users |
 | `PUT` | `/api/v1/admin/users/{user_id}` | ✅ (superuser) | Update a user's plan, quota, or `is_superuser` status |
+| `POST` | `/api/v1/admin/users/{user_id}/subscription/team` | ✅ (superuser) | Upgrade a user to the Team Plan |
+| `POST` | `/api/v1/admin/users/{user_id}/subscription/enterprise` | ✅ (superuser) | Upgrade a user to the Enterprise Plan |
 | `GET` | `/api/v1/admin/scans` | ✅ (superuser) | List all security scans on the platform |
 | `GET` | `/api/v1/admin/findings/fixed` | ✅ (superuser) | List all fixed vulnerabilities across the platform |
 | `GET` | `/api/v1/admin/health/stats` | ✅ (superuser) | Get system-wide health percentage and security stats |
@@ -256,6 +278,10 @@ curl -X PUT https://code-security-platform.onrender.com/api/v1/admin/users/<USER
      -H "Authorization: Bearer <SUPERUSER_JWT>" \
      -H "Content-Type: application/json" \
      -d '{ "plan": "enterprise" }'
+
+# Official Upgrade to Team (Additive Quota)
+curl -X POST https://code-security-platform.onrender.com/api/v1/admin/users/<USER_ID>/subscription/team \
+     -H "Authorization: Bearer <SUPERUSER_JWT>"
 
 # List all scans on platform
 curl https://code-security-platform.onrender.com/api/v1/admin/scans \

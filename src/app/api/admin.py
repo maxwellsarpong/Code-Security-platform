@@ -7,8 +7,22 @@ from ..schemas import UserProfileRead, AdminUserUpdate, ScanRead, FindingRead, A
 from ..models import User, Scan, Finding, BillingEvent
 from ..core.db import get_session
 from .deps import get_current_superuser
+from ..services.billing import subscribe_user_to_plan
 
 router = APIRouter()
+
+
+def _get_user_by_id_normalized(user_id: str, session: Session) -> User:
+    """
+    Helper to find a user by ID with SQLite normalization (hyphen-insensitive).
+    """
+    normalized_id = user_id.replace("-", "") if isinstance(user_id, str) else str(user_id).replace("-", "")
+    users = session.exec(select(User)).all()
+    target_user = next((u for u in users if str(u.id).replace("-", "") == normalized_id), None)
+    
+    if not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return target_user
 
 
 @router.get("/users", response_model=List[UserProfileRead])
@@ -34,16 +48,8 @@ def update_user(
     """
     Update a user's plan, quota, or superuser status. Accessible only to superusers.
     """
-    # SQLite ID handling where hyphens are stripped out
-    normalized_id = user_id.replace("-", "") if isinstance(user_id, str) else str(user_id).replace("-", "")
+    target_user = _get_user_by_id_normalized(user_id, session)
     
-    # Brute force search to match normalized ID due to SQLite nuances in this project
-    users = session.exec(select(User)).all()
-    target_user = next((u for u in users if str(u.id).replace("-", "") == normalized_id), None)
-    
-    if not target_user:
-        raise HTTPException(status_code=404, detail="User not found")
-        
     if payload.plan is not None:
         target_user.plan = payload.plan
     if payload.is_superuser is not None:
@@ -57,8 +63,39 @@ def update_user(
     session.commit()
     session.refresh(target_user)
     
-
     return target_user
+
+
+@router.post("/users/{user_id}/subscription/team")
+def admin_subscribe_team_plan(
+    user_id: str,
+    session: Session = Depends(get_session),
+    superuser: User = Depends(get_current_superuser)
+):
+    """
+    Upgrade a specific user to the TEAM plan. Accessible only to superusers.
+    """
+    target_user = _get_user_by_id_normalized(user_id, session)
+    subscribe_user_to_plan(target_user.id, "team", session)
+    session.commit()
+
+    return {"status": "success", "message": f"User {target_user.email} successfully upgraded to TEAM plan by admin."}
+
+
+@router.post("/users/{user_id}/subscription/enterprise")
+def admin_subscribe_enterprise_plan(
+    user_id: str,
+    session: Session = Depends(get_session),
+    superuser: User = Depends(get_current_superuser)
+):
+    """
+    Upgrade a specific user to the ENTERPRISE plan. Accessible only to superusers.
+    """
+    target_user = _get_user_by_id_normalized(user_id, session)
+    subscribe_user_to_plan(target_user.id, "enterprise", session)
+    session.commit()
+
+    return {"status": "success", "message": f"User {target_user.email} successfully upgraded to ENTERPRISE plan by admin."}
 
 
 @router.get("/scans", response_model=List[ScanRead])
